@@ -1,4 +1,4 @@
-import hashlib
+﻿import hashlib
 import secrets
 from datetime import timedelta
 
@@ -15,8 +15,10 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from .models import Permission, Role, TentativeConnexion, TokenVerificationEmail, Utilisateur
 from .permissions import EstAdministrateur, HasRolePermission
 from .serializers import (
+    ChangerMotDePasseSerializer,
     InscriptionSerializer,
     LoginSerializer,
+    MoiUpdateSerializer,
     PermissionSerializer,
     RoleSerializer,
     UtilisateurCreationSerializer,
@@ -35,8 +37,8 @@ class LoginView(generics.GenericAPIView):
     POST /api/v1/auth/login
     Body : {"identifiant": "<email ou nom d'utilisateur>", "password": "..."}
 
-    FR-IAM-03 : émission JWT (access + refresh).
-    FR-IAM-04 : journalisation de toute tentative de connexion, réussie ou échouée.
+    FR-IAM-03 : Ã©mission JWT (access + refresh).
+    FR-IAM-04 : journalisation de toute tentative de connexion, rÃ©ussie ou Ã©chouÃ©e.
     """
 
     serializer_class = LoginSerializer
@@ -83,7 +85,7 @@ class LoginView(generics.GenericAPIView):
 
 
 class RefreshView(TokenRefreshView):
-    """POST /api/v1/auth/refresh — renouvellement transparent du token d'accès (§8.3)."""
+    """POST /api/v1/auth/refresh â€” renouvellement transparent du token d'accÃ¨s (Â§8.3)."""
 
     throttle_scope = "auth"
 
@@ -92,7 +94,7 @@ class LogoutView(APIView):
     """
     POST /api/v1/auth/logout
     Body : {"refresh": "<token>"}
-    Révoque le token de rafraîchissement (§13.2 : révocation en cas de compte compromis).
+    RÃ©voque le token de rafraÃ®chissement (Â§13.2 : rÃ©vocation en cas de compte compromis).
     """
 
     permission_classes = [IsAuthenticated]
@@ -102,17 +104,17 @@ class LogoutView(APIView):
             token = RefreshToken(request.data.get("refresh", ""))
             token.blacklist()
         except TokenError:
-            return Response({"detail": "Token de rafraîchissement invalide."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "Token de rafraÃ®chissement invalide."}, status=status.HTTP_400_BAD_REQUEST)
         return Response(status=status.HTTP_205_RESET_CONTENT)
 
 
 class InscriptionView(generics.CreateAPIView):
     """
-    POST /api/v1/auth/register — endpoint PUBLIC (décision produit du 16/09/2026).
+    POST /api/v1/auth/register â€” endpoint PUBLIC (dÃ©cision produit du 16/09/2026).
     Body : {"nom_utilisateur", "email", "password", "code_invitation", ...}
 
-    Compte créé INACTIF (voir VerificationEmailView). Rôle "Employé" et
-    secteur imposés côté serveur par le code d'invitation, jamais par le
+    Compte crÃ©Ã© INACTIF (voir VerificationEmailView). RÃ´le "EmployÃ©" et
+    secteur imposÃ©s cÃ´tÃ© serveur par le code d'invitation, jamais par le
     client (voir InscriptionSerializer).
     """
 
@@ -145,8 +147,8 @@ class InscriptionView(generics.CreateAPIView):
 class VerificationEmailView(APIView):
     """
     GET /api/v1/auth/verify-email?token=<token>
-    Lien cliqué depuis l'email de vérification. Active le compte si le
-    token est valide, non expiré et non déjà utilisé.
+    Lien cliquÃ© depuis l'email de vÃ©rification. Active le compte si le
+    token est valide, non expirÃ© et non dÃ©jÃ  utilisÃ©.
     """
 
     permission_classes = [AllowAny]
@@ -159,11 +161,11 @@ class VerificationEmailView(APIView):
         try:
             enregistrement = TokenVerificationEmail.objects.select_related("utilisateur").get(token_hash=token_hash)
         except TokenVerificationEmail.DoesNotExist:
-            return Response({"detail": "Lien de vérification invalide."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "Lien de vÃ©rification invalide."}, status=status.HTTP_400_BAD_REQUEST)
 
         if not enregistrement.est_valide():
             return Response(
-                {"detail": "Lien de vérification expiré ou déjà utilisé."}, status=status.HTTP_400_BAD_REQUEST
+                {"detail": "Lien de vÃ©rification expirÃ© ou dÃ©jÃ  utilisÃ©."}, status=status.HTTP_400_BAD_REQUEST
             )
 
         user = enregistrement.utilisateur
@@ -176,15 +178,58 @@ class VerificationEmailView(APIView):
         enregistrer(action="activation_compte", module="accounts", auteur=None, cible=user)
 
         return Response(
-            {"detail": "Compte activé avec succès. Vous pouvez maintenant vous connecter."},
+            {"detail": "Compte activÃ© avec succÃ¨s. Vous pouvez maintenant vous connecter."},
             status=status.HTTP_200_OK,
         )
 
 
+class MoiView(APIView):
+    """
+    GET/PATCH /api/v1/me â€” profil de l'utilisateur connectÃ©.
+    PATCH restreint Ã  nom_complet/telephone (voir MoiUpdateSerializer) :
+    un utilisateur ne peut jamais modifier son propre rÃ´le, secteur,
+    statut actif ou secteurs via cet endpoint.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(UtilisateurSerializer(request.user).data)
+
+    def patch(self, request):
+        serializer = MoiUpdateSerializer(request.user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(UtilisateurSerializer(request.user).data)
+
+
+class ChangerMotDePasseView(APIView):
+    """POST /api/v1/me/change-password â€” vÃ©rifie l'ancien mot de passe avant d'appliquer le nouveau."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_scope = "auth"
+
+    def post(self, request):
+        serializer = ChangerMotDePasseSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        if not user.check_password(serializer.validated_data["ancien_mot_de_passe"]):
+            raise ValidationError({"ancien_mot_de_passe": "Mot de passe actuel incorrect."})
+
+        user.set_password(serializer.validated_data["nouveau_mot_de_passe"])
+        user.save(update_fields=["password"])
+
+        from apps.audit.services import enregistrer
+        enregistrer(action="changement_mot_de_passe", module="accounts", auteur=user, cible=user)
+
+        return Response({"detail": "Mot de passe modifiÃ© avec succÃ¨s."}, status=status.HTTP_200_OK)
+
+
 class UtilisateurViewSet(viewsets.ModelViewSet):
     """
-    /api/v1/users — FR-IAM-01/02 : création, modification, désactivation de comptes.
-    Réservé aux Administrateurs (gestion globale, §3.2).
+    /api/v1/users â€” FR-IAM-01/02 : crÃ©ation, modification, dÃ©sactivation de comptes.
+    RÃ©servÃ© aux Administrateurs (gestion globale, Â§3.2).
     """
 
     queryset = Utilisateur.objects.select_related("role", "secteur_principal").order_by("nom_utilisateur")
@@ -204,8 +249,8 @@ class UtilisateurViewSet(viewsets.ModelViewSet):
         )
 
     def perform_destroy(self, instance):
-        # FR-IAM-01 : "désactivation" plutôt que suppression physique — préserve
-        # l'intégrité référentielle avec les Transaction/Tache/JournalAudit déjà liées.
+        # FR-IAM-01 : "dÃ©sactivation" plutÃ´t que suppression physique â€” prÃ©serve
+        # l'intÃ©gritÃ© rÃ©fÃ©rentielle avec les Transaction/Tache/JournalAudit dÃ©jÃ  liÃ©es.
         instance.actif = False
         instance.save(update_fields=["actif"])
         from apps.audit.services import enregistrer
@@ -215,7 +260,7 @@ class UtilisateurViewSet(viewsets.ModelViewSet):
 
 
 class RoleViewSet(viewsets.ModelViewSet):
-    """/api/v1/roles — réservé aux Administrateurs."""
+    """/api/v1/roles â€” rÃ©servÃ© aux Administrateurs."""
 
     queryset = Role.objects.prefetch_related("role_permissions__permission").all()
     serializer_class = RoleSerializer
@@ -223,8 +268,9 @@ class RoleViewSet(viewsets.ModelViewSet):
 
 
 class PermissionViewSet(viewsets.ReadOnlyModelViewSet):
-    """/api/v1/permissions — catalogue en lecture seule, utilisé par l'écran Administration."""
+    """/api/v1/permissions â€” catalogue en lecture seule, utilisÃ© par l'Ã©cran Administration."""
 
     queryset = Permission.objects.all()
     serializer_class = PermissionSerializer
     permission_classes = [EstAdministrateur]
+

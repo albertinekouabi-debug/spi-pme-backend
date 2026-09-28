@@ -1,4 +1,4 @@
-import hashlib
+﻿import hashlib
 from datetime import timedelta
 
 import pytest
@@ -16,7 +16,7 @@ def secteur(db):
 
 @pytest.fixture
 def role_employe(db):
-    return Role.objects.create(nom="Employé")
+    return Role.objects.create(nom="EmployÃ©")
 
 
 @pytest.fixture
@@ -42,8 +42,8 @@ class TestInscription:
         )
         assert response.status_code == 201
         user = Utilisateur.objects.get(email="nouvel.employe@acme.com")
-        assert user.actif is False  # activation différée, vérification email requise
-        assert user.role.nom == "Employé"
+        assert user.actif is False  # activation diffÃ©rÃ©e, vÃ©rification email requise
+        assert user.role.nom == "EmployÃ©"
         assert user.secteur_principal_id == secteur.id
         assert user.secteurs.filter(id=secteur.id).exists()
 
@@ -191,7 +191,7 @@ class TestVerificationEmail:
             utilisateur=user,
             token_hash=hashlib.sha256(token_brut.encode()).hexdigest(),
             date_expiration=timezone.now() + timedelta(hours=24),
-            utilise_le=timezone.now(),  # déjà consommé
+            utilise_le=timezone.now(),  # dÃ©jÃ  consommÃ©
         )
         client = APIClient()
         response = client.get(f"/api/v1/auth/verify-email?token={token_brut}")
@@ -208,7 +208,7 @@ class TestVerificationEmail:
         TokenVerificationEmail.objects.create(
             utilisateur=user,
             token_hash=hashlib.sha256(token_brut.encode()).hexdigest(),
-            date_expiration=timezone.now() - timedelta(hours=1),  # déjà expiré
+            date_expiration=timezone.now() - timedelta(hours=1),  # dÃ©jÃ  expirÃ©
         )
         client = APIClient()
         response = client.get(f"/api/v1/auth/verify-email?token={token_brut}")
@@ -220,3 +220,4 @@ class TestVerificationEmail:
         client = APIClient()
         response = client.get("/api/v1/auth/verify-email?token=nimporte-quoi")
         assert response.status_code == 400
+

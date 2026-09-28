@@ -1,6 +1,6 @@
-"""
-apps.accounts — Identité & Accès (RBAC).
-Référence CDC : §5.1 (FR-IAM-*), §13.1 (RBAC détaillé), §10.2 (modèle de données).
+﻿"""
+apps.accounts â€” IdentitÃ© & AccÃ¨s (RBAC).
+RÃ©fÃ©rence CDC : Â§5.1 (FR-IAM-*), Â§13.1 (RBAC dÃ©taillÃ©), Â§10.2 (modÃ¨le de donnÃ©es).
 """
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import PermissionsMixin
@@ -11,7 +11,7 @@ from .managers import UtilisateurManager
 
 
 class Role(models.Model):
-    """Administrateur, Gérant, Employé, Auditeur (§3.2) — extensible sans modification du code."""
+    """Administrateur, GÃ©rant, EmployÃ©, Auditeur (Â§3.2) â€” extensible sans modification du code."""
 
     nom = models.CharField(max_length=50, unique=True)
     description = models.TextField(blank=True)
@@ -19,8 +19,8 @@ class Role(models.Model):
 
     class Meta:
         db_table = "role"
-        verbose_name = "Rôle"
-        verbose_name_plural = "Rôles"
+        verbose_name = "RÃ´le"
+        verbose_name_plural = "RÃ´les"
 
     def __str__(self):
         return self.nom
@@ -28,20 +28,20 @@ class Role(models.Model):
 
 class Permission(models.Model):
     """
-    Une permission = un code opposable à un endpoint (§13.1).
-    Convention : '<module>.<action>' — ex. 'tresorerie.read', 'stock.write', 'audit.read'.
+    Une permission = un code opposable Ã  un endpoint (Â§13.1).
+    Convention : '<module>.<action>' â€” ex. 'tresorerie.read', 'stock.write', 'audit.read'.
     """
 
     MODULES = [
-        ("accounts", "Identité & Accès"),
+        ("accounts", "IdentitÃ© & AccÃ¨s"),
         ("core", "Configuration sectorielle"),
         ("registry", "Registre central"),
-        ("treasury", "Trésorerie"),
+        ("treasury", "TrÃ©sorerie"),
         ("resources", "Stock / Ressources"),
-        ("tasks", "Tâches & Workflow"),
+        ("tasks", "TÃ¢ches & Workflow"),
         ("intelligence", "Suggestions IA"),
         ("alerts", "Alertes"),
-        ("imports", "Import de données"),
+        ("imports", "Import de donnÃ©es"),
         ("audit", "Journal d'audit"),
     ]
 
@@ -60,7 +60,7 @@ class Permission(models.Model):
 
 
 class RolePermission(models.Model):
-    """Table d'association rôle ↔ permissions, explicitement prévue au §10.2."""
+    """Table d'association rÃ´le â†” permissions, explicitement prÃ©vue au Â§10.2."""
 
     role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name="role_permissions")
     permission = models.ForeignKey(Permission, on_delete=models.CASCADE, related_name="role_permissions")
@@ -68,20 +68,20 @@ class RolePermission(models.Model):
     class Meta:
         db_table = "role_permission"
         unique_together = ("role", "permission")
-        verbose_name = "Association rôle/permission"
-        verbose_name_plural = "Associations rôle/permission"
+        verbose_name = "Association rÃ´le/permission"
+        verbose_name_plural = "Associations rÃ´le/permission"
 
 
 class Utilisateur(AbstractBaseUser, PermissionsMixin):
     """
     Utilisateur applicatif. AUTH_USER_MODEL du projet.
 
-    Note d'architecture (validée avec le porteur de projet) : le CDC mentionne
-    à la fois un secteur "principal" (§10.2, singulier) et un rattachement à
-    "un ou plusieurs secteurs" (§10.3, pluriel). Les deux sont conservés ici :
-    `secteur_principal` = secteur affiché par défaut au sélecteur de la
+    Note d'architecture (validÃ©e avec le porteur de projet) : le CDC mentionne
+    Ã  la fois un secteur "principal" (Â§10.2, singulier) et un rattachement Ã 
+    "un ou plusieurs secteurs" (Â§10.3, pluriel). Les deux sont conservÃ©s ici :
+    `secteur_principal` = secteur affichÃ© par dÃ©faut au sÃ©lecteur de la
     maquette ("Secteur actif"), `secteurs` (via UtilisateurSecteur) = tous les
-    secteurs auxquels l'utilisateur a accès.
+    secteurs auxquels l'utilisateur a accÃ¨s.
     """
 
     nom_utilisateur = models.CharField(max_length=60, unique=True)
@@ -95,9 +95,9 @@ class Utilisateur(AbstractBaseUser, PermissionsMixin):
     )
     secteurs = models.ManyToManyField(Secteur, through="UtilisateurSecteur", related_name="utilisateurs")
 
-    actif = models.BooleanField(default=True)  # FR-IAM-01 : désactivation de comptes
-    mfa_active = models.BooleanField(default=False)  # MFA phase avancée (§13.2) — champ prêt, non exploité au MVP
-    is_staff = models.BooleanField(default=False)  # accès à /admin, distinct du RBAC applicatif
+    actif = models.BooleanField(default=True)  # FR-IAM-01 : dÃ©sactivation de comptes
+    mfa_active = models.BooleanField(default=False)  # MFA phase avancÃ©e (Â§13.2) â€” champ prÃªt, non exploitÃ© au MVP
+    is_staff = models.BooleanField(default=False)  # accÃ¨s Ã  /admin, distinct du RBAC applicatif
 
     date_creation = models.DateTimeField(auto_now_add=True)
     derniere_connexion = models.DateTimeField(null=True, blank=True)
@@ -121,7 +121,7 @@ class Utilisateur(AbstractBaseUser, PermissionsMixin):
         self.actif = value
 
     def a_les_permissions(self, codes_requis: list[str]) -> bool:
-        """Vérifie que le rôle de l'utilisateur porte bien tous les codes de permission requis."""
+        """VÃ©rifie que le rÃ´le de l'utilisateur porte bien tous les codes de permission requis."""
         if not codes_requis:
             return True
         codes_du_role = set(
@@ -134,7 +134,7 @@ class Utilisateur(AbstractBaseUser, PermissionsMixin):
 
 
 class UtilisateurSecteur(models.Model):
-    """Rattachement multi-secteur d'un utilisateur (§10.3)."""
+    """Rattachement multi-secteur d'un utilisateur (Â§10.3)."""
 
     utilisateur = models.ForeignKey(Utilisateur, on_delete=models.CASCADE)
     secteur = models.ForeignKey(Secteur, on_delete=models.CASCADE)
@@ -145,9 +145,9 @@ class UtilisateurSecteur(models.Model):
 
 
 class TentativeConnexion(models.Model):
-    """FR-IAM-04 : journalisation de toute tentative de connexion, réussie ou échouée."""
+    """FR-IAM-04 : journalisation de toute tentative de connexion, rÃ©ussie ou Ã©chouÃ©e."""
 
-    identifiant = models.CharField(max_length=150)  # email ou nom_utilisateur saisi, même si le compte n'existe pas
+    identifiant = models.CharField(max_length=150)  # email ou nom_utilisateur saisi, mÃªme si le compte n'existe pas
     utilisateur = models.ForeignKey(
         Utilisateur, on_delete=models.SET_NULL, null=True, blank=True, related_name="tentatives_connexion"
     )
@@ -165,14 +165,14 @@ class TentativeConnexion(models.Model):
 
 class CodeInvitation(models.Model):
     """
-    Auto-inscription publique (décision produit du 16/09/2026) : un code
-    d'invitation généré par une PME (via l'admin Django pour l'instant —
-    aucun écran dédié n'existe encore côté API/Android, cf. audit) rattache
-    l'inscription au bon `secteur` (= périmètre de données de l'entreprise).
-    Le client n'envoie JAMAIS un secteur directement à l'inscription — seul
-    le code, résolu côté serveur, détermine le secteur. Réutilisable par
-    plusieurs inscriptions (pattern "lien d'invitation d'équipe") tant qu'il
-    reste actif et non expiré, pas à usage unique.
+    Auto-inscription publique (dÃ©cision produit du 16/09/2026) : un code
+    d'invitation gÃ©nÃ©rÃ© par une PME (via l'admin Django pour l'instant â€”
+    aucun Ã©cran dÃ©diÃ© n'existe encore cÃ´tÃ© API/Android, cf. audit) rattache
+    l'inscription au bon `secteur` (= pÃ©rimÃ¨tre de donnÃ©es de l'entreprise).
+    Le client n'envoie JAMAIS un secteur directement Ã  l'inscription â€” seul
+    le code, rÃ©solu cÃ´tÃ© serveur, dÃ©termine le secteur. RÃ©utilisable par
+    plusieurs inscriptions (pattern "lien d'invitation d'Ã©quipe") tant qu'il
+    reste actif et non expirÃ©, pas Ã  usage unique.
     """
 
     code = models.CharField(max_length=32, unique=True)
@@ -198,17 +198,17 @@ class CodeInvitation(models.Model):
         return True
 
     def __str__(self):
-        return f"{self.code} → {self.secteur.nom}"
+        return f"{self.code} â†’ {self.secteur.nom}"
 
 
 class TokenVerificationEmail(models.Model):
     """
-    Token de vérification d'email à usage unique et durée limitée (décision
-    produit du 16/09/2026 : activation différée jusqu'à vérification email).
-    Le token brut n'est JAMAIS stocké — seul son hash SHA-256, même logique
-    de précaution qu'un mot de passe (cf. HachageMotDePasse côté Android).
-    OneToOne : une nouvelle demande (renvoi d'email) remplace la précédente
-    plutôt que d'accumuler des tokens orphelins.
+    Token de vÃ©rification d'email Ã  usage unique et durÃ©e limitÃ©e (dÃ©cision
+    produit du 16/09/2026 : activation diffÃ©rÃ©e jusqu'Ã  vÃ©rification email).
+    Le token brut n'est JAMAIS stockÃ© â€” seul son hash SHA-256, mÃªme logique
+    de prÃ©caution qu'un mot de passe (cf. HachageMotDePasse cÃ´tÃ© Android).
+    OneToOne : une nouvelle demande (renvoi d'email) remplace la prÃ©cÃ©dente
+    plutÃ´t que d'accumuler des tokens orphelins.
     """
 
     utilisateur = models.OneToOneField(
@@ -221,9 +221,10 @@ class TokenVerificationEmail(models.Model):
 
     class Meta:
         db_table = "token_verification_email"
-        verbose_name = "Token de vérification d'email"
-        verbose_name_plural = "Tokens de vérification d'email"
+        verbose_name = "Token de vÃ©rification d'email"
+        verbose_name_plural = "Tokens de vÃ©rification d'email"
 
     def est_valide(self) -> bool:
         from django.utils import timezone
         return self.utilise_le is None and self.date_expiration > timezone.now()
+

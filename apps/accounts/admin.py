@@ -1,4 +1,4 @@
-from django.contrib import admin
+﻿from django.contrib import admin
 
 from .models import CodeInvitation, Permission, Role, RolePermission, TentativeConnexion, TokenVerificationEmail, Utilisateur, UtilisateurSecteur
 
@@ -41,10 +41,10 @@ admin.site.register(UtilisateurSecteur)
 @admin.register(CodeInvitation)
 class CodeInvitationAdmin(admin.ModelAdmin):
     """
-    Outil intérimaire : aucun écran Administration dédié n'existe encore
-    côté API/Android pour générer des codes d'invitation (à construire —
-    cf. gap analysis). En attendant, un administrateur génère et communique
-    le code ici même à ses nouveaux employés.
+    Outil intÃ©rimaire : aucun Ã©cran Administration dÃ©diÃ© n'existe encore
+    cÃ´tÃ© API/Android pour gÃ©nÃ©rer des codes d'invitation (Ã  construire â€”
+    cf. gap analysis). En attendant, un administrateur gÃ©nÃ¨re et communique
+    le code ici mÃªme Ã  ses nouveaux employÃ©s.
     """
     list_display = ("code", "secteur", "actif", "date_expiration", "cree_par", "date_creation")
     list_filter = ("actif", "secteur")
@@ -58,3 +58,4 @@ class TokenVerificationEmailAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         return False
+
