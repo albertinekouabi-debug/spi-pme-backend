@@ -12,6 +12,7 @@ from decimal import Decimal
 from django.db import transaction as db_transaction
 from django.utils import timezone
 
+from apps.resources.models import Ressource
 from apps.treasury.models import Transaction
 
 from .algorithms import REGISTRE
@@ -75,6 +76,21 @@ def valider_suggestion(suggestion_id: int, decideur) -> Suggestion:
 
     transaction_resultante = None
     quantite_suggeree = suggestion.facteurs.get("quantite_suggeree")
+
+    # Traçabilité : la quantité a été calculée à la GÉNÉRATION ; le stock a pu changer depuis.
+    # On ne modifie pas la règle métier (l'humain valide ce qu'il a vu), mais l'écart est
+    # journalisé pour qu'un réapprovisionnement devenu excessif soit visible à l'audit.
+    ecart_stock = None
+    if suggestion.ressource_liee_id and "niveau_actuel" in suggestion.facteurs:
+        niveau_courant = Ressource.objects.filter(pk=suggestion.ressource_liee_id).values_list(
+            "niveau_actuel", flat=True
+        ).first()
+        if niveau_courant is not None:
+            ecart_stock = {
+                "niveau_a_la_generation": suggestion.facteurs["niveau_actuel"],
+                "niveau_a_la_validation": float(niveau_courant),
+            }
+
     if suggestion.ressource_liee_id and quantite_suggeree:
         transaction_resultante = Transaction.objects.create(
             type="mouvement_stock",
@@ -96,7 +112,8 @@ def valider_suggestion(suggestion_id: int, decideur) -> Suggestion:
     enregistrer(
         action="validation_suggestion", module="intelligence", auteur=decideur, cible=suggestion,
         details={"titre": suggestion.titre, "type_algorithme": suggestion.type_algorithme,
-                 "transaction_creee": transaction_resultante.id if transaction_resultante else None},
+                 "transaction_creee": transaction_resultante.id if transaction_resultante else None,
+                 "stock": ecart_stock},
     )
     return suggestion
 

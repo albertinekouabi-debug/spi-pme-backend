@@ -4,19 +4,27 @@ from decimal import Decimal
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Sum
 from django.utils import timezone
+from rest_framework.exceptions import MethodNotAllowed
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from apps.core.concurrence import ConcurrenceOptimisteMixin
+from apps.core.idempotence import IdempotentCreateMixin, idempotente
 from apps.accounts.permissions import HasRolePermission
 
 from . import compliance
+from . import workflow
 from .models import DeclarationConformite, Facture, Transaction
 from .serializers import (
+    AnnulerFactureSerializer,
+    AvoirSerializer,
+    CorrectionTransactionSerializer,
     DeclarationConformiteSerializer,
     DeclarerSerializer,
     ExempterSerializer,
     FactureSerializer,
+    MotifSerializer,
     SignalementManuelSerializer,
     TransactionSerializer,
 )
@@ -32,15 +40,31 @@ def _perimetre_secteurs(user):
     return secteurs
 
 
-class TransactionViewSet(viewsets.ModelViewSet):
+
+def _reponse_erreur_workflow(exc: "workflow.ErreurWorkflow"):
+    return Response({"detail": exc.message}, status=exc.code_http)
+
+
+def _request_id(request):
+    return request.headers.get("X-Request-ID") or None
+
+
+class TransactionViewSet(IdempotentCreateMixin, ConcurrenceOptimisteMixin, viewsets.ModelViewSet):
     """
     /api/v1/transactions
 
     FR-TRE-01 : saisie des entrées/sorties.
     Un mouvement_stock met aussi à jour Ressource.niveau_actuel (voir Transaction.save()),
     ce qui recalcule automatiquement son statut (FR-STK-02).
+
+    Politique de correction (décision métier arrêtée, voir workflow.py) :
+      brouillon  → PATCH et DELETE autorisés (aucun effet de stock ni de KPI) ;
+      validée    → données financières IMMUABLES (409), suppression interdite (405) ;
+      erreur     → POST /contre-passer (annulation) ou /corriger (annulation + remplacement) ;
+      exception  → POST /reouvrir (permission treasury.reopen + motif, journalisé).
     """
 
+    http_method_names = ["get", "post", "put", "patch", "delete", "head", "options"]
     serializer_class = TransactionSerializer
     permission_classes = [HasRolePermission]
     required_permissions = {
@@ -50,6 +74,78 @@ class TransactionViewSet(viewsets.ModelViewSet):
         "PATCH": ["treasury.write"],
         "DELETE": ["treasury.write"],
     }
+
+    def destroy(self, request, *args, **kwargs):
+        transaction = self.get_object()
+        if transaction.statut != "brouillon":
+            raise MethodNotAllowed(
+                "DELETE",
+                detail="Une transaction validée ne se supprime jamais : utiliser /contre-passer ou /corriger.",
+            )
+        return super().destroy(request, *args, **kwargs)
+
+    @action(detail=True, methods=["post"], url_path="valider")
+    @idempotente
+    def valider(self, request, pk=None):
+        """POST /transactions/{id}/valider — brouillon → validée (effet de stock et conformité appliqués ici)."""
+        try:
+            t = workflow.valider_transaction(self.get_object(), request.user, _request_id(request))
+        except workflow.ErreurWorkflow as exc:
+            return _reponse_erreur_workflow(exc)
+        return Response(TransactionSerializer(t, context={"request": request}).data)
+
+    @action(detail=True, methods=["post"], url_path="contre-passer")
+    @idempotente
+    def contre_passer(self, request, pk=None):
+        """POST /transactions/{id}/contre-passer {motif} — crée l'écriture inverse ; l'original est conservé."""
+        serializer = MotifSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            inverse = workflow.contre_passer(
+                self.get_object(), request.user, serializer.validated_data["motif"], _request_id(request)
+            )
+        except workflow.ErreurWorkflow as exc:
+            return _reponse_erreur_workflow(exc)
+        return Response(TransactionSerializer(inverse, context={"request": request}).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path="corriger")
+    @idempotente
+    def corriger(self, request, pk=None):
+        """
+        POST /transactions/{id}/corriger {motif, remplacement:{...champs d'une transaction...}}
+        Contre-écriture + nouvelle transaction, atomiquement. Le remplacement est validé comme une création.
+        """
+        entree = CorrectionTransactionSerializer(data=request.data)
+        entree.is_valid(raise_exception=True)
+        original = self.get_object()
+        donnees = dict(entree.validated_data["remplacement"])
+        donnees.pop("statut", None)
+        remplacement = TransactionSerializer(data=donnees, context={"request": request})
+        remplacement.is_valid(raise_exception=True)
+        champs = {k: v for k, v in remplacement.validated_data.items() if k != "statut"}
+        try:
+            inverse, nouvelle = workflow.corriger(
+                original, request.user, entree.validated_data["motif"], champs, _request_id(request)
+            )
+        except workflow.ErreurWorkflow as exc:
+            return _reponse_erreur_workflow(exc)
+        contexte = {"request": request}
+        return Response({
+            "contre_ecriture": TransactionSerializer(inverse, context=contexte).data,
+            "remplacement": TransactionSerializer(nouvelle, context=contexte).data,
+        }, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path="reouvrir")
+    @idempotente
+    def reouvrir(self, request, pk=None):
+        """POST /transactions/{id}/reouvrir {motif} — exceptionnel : permission treasury.reopen, motif, audit."""
+        serializer = MotifSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            t = workflow.reouvrir(self.get_object(), request.user, serializer.validated_data["motif"], _request_id(request))
+        except workflow.ErreurWorkflow as exc:
+            return _reponse_erreur_workflow(exc)
+        return Response(TransactionSerializer(t, context={"request": request}).data)
 
     def get_queryset(self):
         user = self.request.user
@@ -64,6 +160,8 @@ class TransactionViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(secteur_id=secteur_id)
         if type_transaction := params.get("type"):
             queryset = queryset.filter(type=type_transaction)
+        if statut := params.get("statut"):
+            queryset = queryset.filter(statut=statut)
         if entite_id := params.get("entite"):
             queryset = queryset.filter(entite_id=entite_id)
         if ressource_id := params.get("ressource"):
@@ -78,7 +176,7 @@ class TransactionViewSet(viewsets.ModelViewSet):
     def _queryset_financiere(self):
         """Transactions entrée/sortie uniquement, dans le périmètre courant (hors filtres additionnels)."""
         user = self.request.user
-        queryset = Transaction.objects.filter(type__in=["entree", "sortie"])
+        queryset = Transaction.objects.filter(type__in=["entree", "sortie"]).exclude(statut="brouillon")
         secteurs_autorises = _perimetre_secteurs(user)
         if secteurs_autorises is not None:
             queryset = queryset.filter(secteur_id__in=secteurs_autorises)
@@ -134,9 +232,17 @@ class TransactionViewSet(viewsets.ModelViewSet):
         return Response(points)
 
 
-class FactureViewSet(viewsets.ModelViewSet):
-    """/api/v1/invoices — FR-TRE-02 : suivi des factures et relances."""
+class FactureViewSet(IdempotentCreateMixin, ConcurrenceOptimisteMixin, viewsets.ModelViewSet):
+    """
+    /api/v1/invoices — FR-TRE-02 : suivi des factures et relances.
 
+    Pas de suppression physique (audit BE-008, même garantie structurelle
+    que DeclarationConformite ci-dessous) : une facture est un document
+    financier qui doit rester traçable même erronée. `annuler` remplace
+    DELETE.
+    """
+
+    http_method_names = ["get", "post", "put", "patch", "head", "options"]  # pas de "delete"
     serializer_class = FactureSerializer
     permission_classes = [HasRolePermission]
     required_permissions = {
@@ -144,7 +250,6 @@ class FactureViewSet(viewsets.ModelViewSet):
         "POST": ["treasury.write"],
         "PUT": ["treasury.write"],
         "PATCH": ["treasury.write"],
-        "DELETE": ["treasury.write"],
     }
 
     def get_queryset(self):
@@ -162,6 +267,37 @@ class FactureViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(entite_id=entite_id)
 
         return queryset
+
+    @action(detail=True, methods=["post"], url_path="annuler")
+    @idempotente
+    def annuler(self, request, pk=None):
+        """
+        POST /invoices/{id}/annuler {motif} — annulation = avoir TOTAL relié + facture « annulée ».
+        Jamais de suppression. Une facture déjà annulée renvoie 409 (motif d'origine conservé).
+        """
+        serializer = AnnulerFactureSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        facture = self.get_object()
+        try:
+            resultat = workflow.annuler_facture(facture, request.user, serializer.validated_data["motif"], _request_id(request))
+        except workflow.ErreurWorkflow as exc:
+            return _reponse_erreur_workflow(exc)
+        return Response(FactureSerializer(resultat).data)
+
+    @action(detail=True, methods=["post"], url_path="avoir")
+    @idempotente
+    def avoir(self, request, pk=None):
+        """POST /invoices/{id}/avoir {motif, montant?} — avoir (total par défaut, ou partiel)."""
+        serializer = AvoirSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            avoir = workflow.emettre_avoir(
+                self.get_object(), request.user, serializer.validated_data["motif"],
+                serializer.validated_data.get("montant"), _request_id(request),
+            )
+        except workflow.ErreurWorkflow as exc:
+            return _reponse_erreur_workflow(exc)
+        return Response(FactureSerializer(avoir).data, status=status.HTTP_201_CREATED)
 
 
 class DeclarationConformiteViewSet(viewsets.ReadOnlyModelViewSet):

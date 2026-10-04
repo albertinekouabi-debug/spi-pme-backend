@@ -31,6 +31,7 @@ class ImportFichierViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ImportFichierSerializer
     permission_classes = [HasRolePermission]
     parser_classes = [MultiPartParser]
+    throttle_scope = "imports"  # 20/min, cf. settings.DEFAULT_THROTTLE_RATES
     required_permissions = {
         "GET": ["imports.read"],
         "POST": ["imports.write"],

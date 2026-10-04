@@ -6,10 +6,10 @@ Référence CDC : §5.2 (FR-REG-*), §10.2.
 from django.conf import settings
 from django.db import models
 
-from apps.core.models import Secteur
+from apps.core.models import Secteur, Versionne
 
 
-class Entite(models.Model):
+class Entite(Versionne):
     STATUTS = [
         ("actif", "Actif"),
         ("inactif", "Inactif"),

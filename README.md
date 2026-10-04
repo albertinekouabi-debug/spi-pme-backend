@@ -6,11 +6,25 @@ Pile : Django 5.x/6.x + Django REST Framework + Simple JWT + PostgreSQL
 Modules : `core`, `accounts`, `registry`, `resources`, `treasury`, `tasks`,
 `intelligence`, `alerts`, `imports`, `audit`.
 
+## Démarrage : configuration obligatoire
+
+Le serveur **refuse de démarrer** sans `DJANGO_SECRET_KEY` (>= 32 caractères,
+hors `DJANGO_DEBUG=True`, où une clé éphémère est générée). Voir `spi_pme/settings.py`.
+Hors développement : cookies sécurisés, HSTS et redirection HTTPS actifs par défaut.
+
+```
+export DJANGO_SECRET_KEY="$(python -c 'import secrets;print(secrets.token_urlsafe(50))')"
+export DB_PASSWORD=...          # + DB_NAME, DB_USER, DB_HOST, DB_PORT
+python -m pytest                # utilise spi_pme.settings_test (clé de test dédiée)
+```
+
+Import de fichiers : 5 Mo max, 10 000 lignes max, formats `.csv` et `.xlsx` uniquement.
+
 ## État réel, vérifié
 
 - `python manage.py check` : OK
 - Migrations générées sans erreur (10 apps)
-- **135 tests automatisés, tous passants**, aucune régression à chaque étape
+- **188 tests automatisés, tous passants** (PostgreSQL 16, Django 5.1), aucune régression à chaque étape
   (règle appliquée systématiquement depuis le milieu du projet)
 - `seed_rbac` et `seed_parametres_conformite` idempotents
 

@@ -1,4 +1,4 @@
-﻿from django.contrib import admin
+from django.contrib import admin
 from django.urls import include, path
 
 urlpatterns = [
@@ -13,5 +13,6 @@ urlpatterns = [
     path("api/v1/", include("apps.alerts.urls")),
     path("api/v1/", include("apps.imports.urls")),
     path("api/v1/", include("apps.audit.urls")),
+    path("api/v1/", include("apps.analytics.urls")),
 ]
 

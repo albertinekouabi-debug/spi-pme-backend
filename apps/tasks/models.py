@@ -6,8 +6,10 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
+from apps.core.models import Versionne
 
-class Tache(models.Model):
+
+class Tache(Versionne):
     PRIORITES = [
         ("basse", "Basse"),
         ("moyenne", "Moyenne"),

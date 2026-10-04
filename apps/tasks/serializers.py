@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from apps.core.perimetre import verifier_perimetre
+
 from .models import Tache, TacheHistoriqueStatut
 
 
@@ -21,12 +23,17 @@ class TacheSerializer(serializers.ModelSerializer):
     class Meta:
         model = Tache
         fields = [
+            "version",
             "id", "titre", "description", "categorie", "priorite", "statut", "lieu",
             "assignee", "assignee_nom", "createur", "createur_nom",
             "echeance", "secteur", "secteur_nom", "en_retard",
             "date_creation", "date_maj",
         ]
-        read_only_fields = ["id", "createur", "date_creation", "date_maj"]
+        read_only_fields = ["id", "version", "createur", "date_creation", "date_maj"]
+
+    def validate(self, attrs):
+        verifier_perimetre(self, attrs)
+        return attrs
 
     def _utilisateur_courant(self):
         request = self.context.get("request")

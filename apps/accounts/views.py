@@ -1,4 +1,4 @@
-﻿import hashlib
+import hashlib
 import secrets
 from datetime import timedelta
 
@@ -12,11 +12,21 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from .models import Permission, Role, TentativeConnexion, TokenVerificationEmail, Utilisateur
+from .models import (
+    Permission,
+    Role,
+    TentativeConnexion,
+    TokenReinitialisationMotDePasse,
+    TokenVerificationEmail,
+    Utilisateur,
+)
 from .permissions import EstAdministrateur, HasRolePermission
 from .serializers import (
     ChangerMotDePasseSerializer,
+    ConfirmationReinitialisationSerializer,
+    DemandeReinitialisationSerializer,
     InscriptionSerializer,
+    MoiSerializer,
     LoginSerializer,
     MoiUpdateSerializer,
     PermissionSerializer,
@@ -24,7 +34,7 @@ from .serializers import (
     UtilisateurCreationSerializer,
     UtilisateurSerializer,
 )
-from .services import envoyer_email_verification
+from .services import envoyer_email_reinitialisation, envoyer_email_verification
 
 
 def _adresse_ip(request):
@@ -37,8 +47,8 @@ class LoginView(generics.GenericAPIView):
     POST /api/v1/auth/login
     Body : {"identifiant": "<email ou nom d'utilisateur>", "password": "..."}
 
-    FR-IAM-03 : Ã©mission JWT (access + refresh).
-    FR-IAM-04 : journalisation de toute tentative de connexion, rÃ©ussie ou Ã©chouÃ©e.
+    FR-IAM-03 : émission JWT (access + refresh).
+    FR-IAM-04 : journalisation de toute tentative de connexion, réussie ou échouée.
     """
 
     serializer_class = LoginSerializer
@@ -85,7 +95,7 @@ class LoginView(generics.GenericAPIView):
 
 
 class RefreshView(TokenRefreshView):
-    """POST /api/v1/auth/refresh â€” renouvellement transparent du token d'accÃ¨s (Â§8.3)."""
+    """POST /api/v1/auth/refresh — renouvellement transparent du token d'accès (§8.3)."""
 
     throttle_scope = "auth"
 
@@ -94,7 +104,7 @@ class LogoutView(APIView):
     """
     POST /api/v1/auth/logout
     Body : {"refresh": "<token>"}
-    RÃ©voque le token de rafraÃ®chissement (Â§13.2 : rÃ©vocation en cas de compte compromis).
+    Révoque le token de rafraîchissement (§13.2 : révocation en cas de compte compromis).
     """
 
     permission_classes = [IsAuthenticated]
@@ -104,17 +114,17 @@ class LogoutView(APIView):
             token = RefreshToken(request.data.get("refresh", ""))
             token.blacklist()
         except TokenError:
-            return Response({"detail": "Token de rafraÃ®chissement invalide."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "Token de rafraîchissement invalide."}, status=status.HTTP_400_BAD_REQUEST)
         return Response(status=status.HTTP_205_RESET_CONTENT)
 
 
 class InscriptionView(generics.CreateAPIView):
     """
-    POST /api/v1/auth/register â€” endpoint PUBLIC (dÃ©cision produit du 16/09/2026).
+    POST /api/v1/auth/register — endpoint PUBLIC (décision produit du 16/09/2026).
     Body : {"nom_utilisateur", "email", "password", "code_invitation", ...}
 
-    Compte crÃ©Ã© INACTIF (voir VerificationEmailView). RÃ´le "EmployÃ©" et
-    secteur imposÃ©s cÃ´tÃ© serveur par le code d'invitation, jamais par le
+    Compte créé INACTIF (voir VerificationEmailView). Rôle "Employé" et
+    secteur imposés côté serveur par le code d'invitation, jamais par le
     client (voir InscriptionSerializer).
     """
 
@@ -147,8 +157,8 @@ class InscriptionView(generics.CreateAPIView):
 class VerificationEmailView(APIView):
     """
     GET /api/v1/auth/verify-email?token=<token>
-    Lien cliquÃ© depuis l'email de vÃ©rification. Active le compte si le
-    token est valide, non expirÃ© et non dÃ©jÃ  utilisÃ©.
+    Lien cliqué depuis l'email de vérification. Active le compte si le
+    token est valide, non expiré et non déjà utilisé.
     """
 
     permission_classes = [AllowAny]
@@ -161,11 +171,11 @@ class VerificationEmailView(APIView):
         try:
             enregistrement = TokenVerificationEmail.objects.select_related("utilisateur").get(token_hash=token_hash)
         except TokenVerificationEmail.DoesNotExist:
-            return Response({"detail": "Lien de vÃ©rification invalide."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "Lien de vérification invalide."}, status=status.HTTP_400_BAD_REQUEST)
 
         if not enregistrement.est_valide():
             return Response(
-                {"detail": "Lien de vÃ©rification expirÃ© ou dÃ©jÃ  utilisÃ©."}, status=status.HTTP_400_BAD_REQUEST
+                {"detail": "Lien de vérification expiré ou déjà utilisé."}, status=status.HTTP_400_BAD_REQUEST
             )
 
         user = enregistrement.utilisateur
@@ -178,23 +188,113 @@ class VerificationEmailView(APIView):
         enregistrer(action="activation_compte", module="accounts", auteur=None, cible=user)
 
         return Response(
-            {"detail": "Compte activÃ© avec succÃ¨s. Vous pouvez maintenant vous connecter."},
+            {"detail": "Compte activé avec succès. Vous pouvez maintenant vous connecter."},
             status=status.HTTP_200_OK,
         )
 
 
+
+class DemanderReinitialisationMotDePasseView(APIView):
+    """
+    POST /api/v1/auth/password-reset/request — endpoint PUBLIC.
+    Body : {"email": "..."}
+
+    Réponse 200 systématique, que l'email existe ou non (pas d'énumération
+    de comptes). Si un compte actif correspond, un email est envoyé avec un
+    lien à usage unique, valable 1 heure.
+    """
+
+    permission_classes = [AllowAny]
+    throttle_scope = "auth"
+
+    def post(self, request):
+        serializer = DemandeReinitialisationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data["email"]
+
+        try:
+            user = Utilisateur.objects.get(email__iexact=email, actif=True)
+        except Utilisateur.DoesNotExist:
+            return Response({"detail": "Si ce compte existe, un email a été envoyé."})
+
+        token_brut = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(token_brut.encode()).hexdigest()
+        TokenReinitialisationMotDePasse.objects.update_or_create(
+            utilisateur=user,
+            defaults={
+                "token_hash": token_hash,
+                "date_expiration": timezone.now() + timedelta(hours=1),
+                "utilise_le": None,
+            },
+        )
+        envoyer_email_reinitialisation(user, token_brut)
+
+        from apps.audit.services import enregistrer
+        enregistrer(
+            action="demande_reinitialisation_mot_de_passe", module="accounts",
+            auteur=None, cible=user, details={"email": user.email},
+        )
+        return Response({"detail": "Si ce compte existe, un email a été envoyé."})
+
+
+class ConfirmerReinitialisationMotDePasseView(APIView):
+    """
+    POST /api/v1/auth/password-reset/confirm — endpoint PUBLIC.
+    Body : {"token": "...", "nouveau_mot_de_passe": "..."}
+
+    Invalide toutes les sessions existantes de l'utilisateur (JWT SimpleJWT
+    n'a pas de révocation native : on force un changement du mot de passe,
+    qui est vérifié à chaque connexion, et on journalise l'événement pour
+    permettre à un administrateur de surveiller les révocations forcées).
+    """
+
+    permission_classes = [AllowAny]
+    throttle_scope = "auth"
+
+    def post(self, request):
+        serializer = ConfirmationReinitialisationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        token_brut = serializer.validated_data["token"]
+        token_hash = hashlib.sha256(token_brut.encode()).hexdigest()
+
+        try:
+            enregistrement = TokenReinitialisationMotDePasse.objects.select_related("utilisateur").get(
+                token_hash=token_hash
+            )
+        except TokenReinitialisationMotDePasse.DoesNotExist:
+            return Response({"detail": "Lien de réinitialisation invalide."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not enregistrement.est_valide():
+            return Response(
+                {"detail": "Lien de réinitialisation expiré ou déjà utilisé."}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        user = enregistrement.utilisateur
+        user.set_password(serializer.validated_data["nouveau_mot_de_passe"])
+        user.save(update_fields=["password"])
+        enregistrement.utilise_le = timezone.now()
+        enregistrement.save(update_fields=["utilise_le"])
+
+        from apps.audit.services import enregistrer
+        enregistrer(
+            action="reinitialisation_mot_de_passe", module="accounts",
+            auteur=None, cible=user, details={"email": user.email},
+        )
+        return Response({"detail": "Mot de passe réinitialisé avec succès."})
+
+
 class MoiView(APIView):
     """
-    GET/PATCH /api/v1/me â€” profil de l'utilisateur connectÃ©.
-    PATCH restreint Ã  nom_complet/telephone (voir MoiUpdateSerializer) :
-    un utilisateur ne peut jamais modifier son propre rÃ´le, secteur,
+    GET/PATCH /api/v1/me — profil de l'utilisateur connecté.
+    PATCH restreint à nom_complet/telephone (voir MoiUpdateSerializer) :
+    un utilisateur ne peut jamais modifier son propre rôle, secteur,
     statut actif ou secteurs via cet endpoint.
     """
 
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        return Response(UtilisateurSerializer(request.user).data)
+        return Response(MoiSerializer(request.user).data)
 
     def patch(self, request):
         serializer = MoiUpdateSerializer(request.user, data=request.data, partial=True)
@@ -204,7 +304,7 @@ class MoiView(APIView):
 
 
 class ChangerMotDePasseView(APIView):
-    """POST /api/v1/me/change-password â€” vÃ©rifie l'ancien mot de passe avant d'appliquer le nouveau."""
+    """POST /api/v1/me/change-password — vérifie l'ancien mot de passe avant d'appliquer le nouveau."""
 
     permission_classes = [IsAuthenticated]
     throttle_scope = "auth"
@@ -223,13 +323,13 @@ class ChangerMotDePasseView(APIView):
         from apps.audit.services import enregistrer
         enregistrer(action="changement_mot_de_passe", module="accounts", auteur=user, cible=user)
 
-        return Response({"detail": "Mot de passe modifiÃ© avec succÃ¨s."}, status=status.HTTP_200_OK)
+        return Response({"detail": "Mot de passe modifié avec succès."}, status=status.HTTP_200_OK)
 
 
 class UtilisateurViewSet(viewsets.ModelViewSet):
     """
-    /api/v1/users â€” FR-IAM-01/02 : crÃ©ation, modification, dÃ©sactivation de comptes.
-    RÃ©servÃ© aux Administrateurs (gestion globale, Â§3.2).
+    /api/v1/users — FR-IAM-01/02 : création, modification, désactivation de comptes.
+    Réservé aux Administrateurs (gestion globale, §3.2).
     """
 
     queryset = Utilisateur.objects.select_related("role", "secteur_principal").order_by("nom_utilisateur")
@@ -249,8 +349,8 @@ class UtilisateurViewSet(viewsets.ModelViewSet):
         )
 
     def perform_destroy(self, instance):
-        # FR-IAM-01 : "dÃ©sactivation" plutÃ´t que suppression physique â€” prÃ©serve
-        # l'intÃ©gritÃ© rÃ©fÃ©rentielle avec les Transaction/Tache/JournalAudit dÃ©jÃ  liÃ©es.
+        # FR-IAM-01 : "désactivation" plutôt que suppression physique — préserve
+        # l'intégrité référentielle avec les Transaction/Tache/JournalAudit déjà liées.
         instance.actif = False
         instance.save(update_fields=["actif"])
         from apps.audit.services import enregistrer
@@ -260,7 +360,7 @@ class UtilisateurViewSet(viewsets.ModelViewSet):
 
 
 class RoleViewSet(viewsets.ModelViewSet):
-    """/api/v1/roles â€” rÃ©servÃ© aux Administrateurs."""
+    """/api/v1/roles — réservé aux Administrateurs."""
 
     queryset = Role.objects.prefetch_related("role_permissions__permission").all()
     serializer_class = RoleSerializer
@@ -268,7 +368,7 @@ class RoleViewSet(viewsets.ModelViewSet):
 
 
 class PermissionViewSet(viewsets.ReadOnlyModelViewSet):
-    """/api/v1/permissions â€” catalogue en lecture seule, utilisÃ© par l'Ã©cran Administration."""
+    """/api/v1/permissions — catalogue en lecture seule, utilisé par l'écran Administration."""
 
     queryset = Permission.objects.all()
     serializer_class = PermissionSerializer

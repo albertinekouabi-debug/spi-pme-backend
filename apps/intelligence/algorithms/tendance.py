@@ -23,6 +23,12 @@ from .base import Algorithme, SuggestionDraft
 FENETRE_JOURS = 14
 SEUIL_JOURS_AVANT_RUPTURE = 7
 POINTS_MINIMUM = 3
+# Qualité minimale d'ajustement : en dessous, la droite n'explique pas assez la
+# trajectoire pour qu'une projection de rupture soit crédible. Mieux vaut ne rien
+# suggérer qu'alerter sur du bruit (faux positifs = perte de confiance des
+# utilisateurs). Le système "sait dire qu'il ne sait pas".
+R2_MINIMUM = 0.5
+CONFIANCE_MAXIMUM = Decimal("95")  # jamais de certitude affichée pour une projection
 
 
 class TendanceAlgorithme(Algorithme):
@@ -35,6 +41,7 @@ class TendanceAlgorithme(Algorithme):
         # Une seule requête agrégée pour toutes les ressources du secteur.
         mouvements = (
             Transaction.objects
+            .exclude(statut="brouillon")
             .filter(secteur=secteur, type="mouvement_stock", ressource__isnull=False,
                     date_transaction__date__gte=date_limite)
             .annotate(jour=TruncDate("date_transaction"))
@@ -86,7 +93,11 @@ class TendanceAlgorithme(Algorithme):
         if jours_avant_rupture is None or jours_avant_rupture > SEUIL_JOURS_AVANT_RUPTURE:
             return None
 
-        confiance = max(Decimal("50"), min(Decimal("95"), Decimal(str(round(r2 * 100, 2)))))
+        if r2 < R2_MINIMUM:
+            return None  # tendance baissière mais trop erratique pour être projetée honnêtement
+
+        # Confiance = qualité d'ajustement réelle, sans plancher artificiel.
+        confiance = min(CONFIANCE_MAXIMUM, Decimal(str(round(r2 * 100, 2))))
 
         return SuggestionDraft(
             titre=f"Anticiper la rupture de {ressource.nom}",
@@ -99,6 +110,11 @@ class TendanceAlgorithme(Algorithme):
                 "coefficient_ajustement_r2": round(r2, 3),
                 "jours_avant_rupture_estimes": round(jours_avant_rupture, 1),
                 "fenetre_analysee_jours": FENETRE_JOURS,
+                "nb_jours_observes": len(jours_tries),
+                "limites": (
+                    "Projection linéaire sur l'historique récent ; ne tient compte ni des "
+                    "réapprovisionnements futurs ni de la saisonnalité."
+                ),
             },
             confiance=confiance,
             impact_estime=None,  # pas de quantité de réappro certaine à ce stade, juste une alerte de tendance

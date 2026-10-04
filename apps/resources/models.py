@@ -8,11 +8,11 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from apps.core.models import Secteur
+from apps.core.models import Secteur, Versionne
 from apps.registry.models import Entite
 
 
-class Ressource(models.Model):
+class Ressource(Versionne):
     STATUTS = [
         ("critique", "Critique"),
         ("a_surveiller", "À surveiller"),

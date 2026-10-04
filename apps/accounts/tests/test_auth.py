@@ -1,7 +1,7 @@
 import pytest
 from rest_framework.test import APIClient
 
-from apps.accounts.models import Role, TentativeConnexion, Utilisateur
+from apps.accounts.models import Role, TentativeConnexion, TokenReinitialisationMotDePasse, Utilisateur
 from apps.core.models import Secteur
 
 
@@ -116,3 +116,83 @@ class TestRBAC:
         client.force_authenticate(user=admin)
         response = client.get("/api/v1/users/")
         assert response.status_code == 200
+
+
+@pytest.mark.django_db
+class TestReinitialisationMotDePasse:
+    """Parcours 'Mot de passe oublié' (audit AN — point d'entrée absent du client)."""
+
+    def _utilisateur(self, mot_de_passe="AncienMdp#2026"):
+        role = Role.objects.create(nom="Employé")
+        return Utilisateur.objects.create_user(
+            email="oubli@spipme.com", nom_utilisateur="oubli", password=mot_de_passe, role=role,
+        )
+
+    def test_demande_avec_email_existant_renvoie_200_et_cree_un_token(self, mailoutbox):
+        self._utilisateur()
+        r = APIClient().post("/api/v1/auth/password-reset/request", {"email": "oubli@spipme.com"}, format="json")
+        assert r.status_code == 200
+        assert TokenReinitialisationMotDePasse.objects.count() == 1
+        assert len(mailoutbox) == 1
+
+    def test_demande_avec_email_inconnu_renvoie_200_sans_creer_de_token(self, mailoutbox):
+        r = APIClient().post("/api/v1/auth/password-reset/request", {"email": "personne@spipme.com"}, format="json")
+        assert r.status_code == 200  # pas d'énumération de comptes
+        assert TokenReinitialisationMotDePasse.objects.count() == 0
+        assert len(mailoutbox) == 0
+
+    def test_confirmation_avec_token_valide_change_le_mot_de_passe(self, mailoutbox):
+        user = self._utilisateur()
+        APIClient().post("/api/v1/auth/password-reset/request", {"email": "oubli@spipme.com"}, format="json")
+        token_brut = mailoutbox[0].body.split("token=")[1].split("\n")[0].strip()
+
+        r = APIClient().post("/api/v1/auth/password-reset/confirm", {
+            "token": token_brut, "nouveau_mot_de_passe": "NouveauMdp#2026",
+        }, format="json")
+        assert r.status_code == 200
+
+        user.refresh_from_db()
+        assert user.check_password("NouveauMdp#2026")
+        assert not user.check_password("AncienMdp#2026")
+
+    def test_confirmation_ne_peut_pas_reutiliser_le_meme_token(self):
+        self._utilisateur()
+        APIClient().post("/api/v1/auth/password-reset/request", {"email": "oubli@spipme.com"}, format="json")
+        from django.core import mail
+        token_brut = mail.outbox[0].body.split("token=")[1].split("\n")[0].strip()
+        client = APIClient()
+        premiere = client.post("/api/v1/auth/password-reset/confirm", {
+            "token": token_brut, "nouveau_mot_de_passe": "Premier#2026",
+        }, format="json")
+        assert premiere.status_code == 200
+        deuxieme = client.post("/api/v1/auth/password-reset/confirm", {
+            "token": token_brut, "nouveau_mot_de_passe": "Deuxieme#2026",
+        }, format="json")
+        assert deuxieme.status_code == 400
+
+    def test_confirmation_avec_token_invalide_renvoie_400(self):
+        r = APIClient().post("/api/v1/auth/password-reset/confirm", {
+            "token": "un-token-qui-n-existe-pas", "nouveau_mot_de_passe": "NouveauMdp#2026",
+        }, format="json")
+        assert r.status_code == 400
+
+    def test_confirmation_rejette_un_mot_de_passe_trop_faible(self):
+        self._utilisateur()
+        APIClient().post("/api/v1/auth/password-reset/request", {"email": "oubli@spipme.com"}, format="json")
+        from django.core import mail
+        token_brut = mail.outbox[0].body.split("token=")[1].split("\n")[0].strip()
+        r = APIClient().post("/api/v1/auth/password-reset/confirm", {
+            "token": token_brut, "nouveau_mot_de_passe": "1234",
+        }, format="json")
+        assert r.status_code == 400
+
+
+@pytest.mark.django_db
+def test_login_renvoie_les_permissions_du_role_pour_le_client_hors_ligne():
+    from apps.accounts.models import Permission, RolePermission
+    role = Role.objects.create(nom="Comptable")
+    p, _ = Permission.objects.get_or_create(code="treasury.write", defaults={"module": "treasury"})
+    RolePermission.objects.create(role=role, permission=p)
+    Utilisateur.objects.create_user(email="c@x.com", nom_utilisateur="compta", password="MotDePasse#2026", role=role)
+    r = APIClient().post("/api/v1/auth/login", {"identifiant": "compta", "password": "MotDePasse#2026"}, format="json")
+    assert r.status_code == 200 and r.data["utilisateur"]["permissions"] == ["treasury.write"]

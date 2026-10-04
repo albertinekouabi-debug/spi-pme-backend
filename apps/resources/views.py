@@ -8,13 +8,15 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
+from apps.core.concurrence import ConcurrenceOptimisteMixin
+from apps.core.idempotence import IdempotentCreateMixin
 from apps.accounts.permissions import HasRolePermission
 
 from .models import Ressource
 from .serializers import RessourceSerializer
 
 
-class RessourceViewSet(viewsets.ModelViewSet):
+class RessourceViewSet(IdempotentCreateMixin, ConcurrenceOptimisteMixin, viewsets.ModelViewSet):
     """
     /api/v1/resources
 
@@ -91,7 +93,7 @@ class RessourceViewSet(viewsets.ModelViewSet):
 
         aujourdhui = timezone.now().date()
         mouvements = list(
-            Transaction.objects.filter(ressource=ressource, type="mouvement_stock")
+            Transaction.objects.exclude(statut="brouillon").filter(ressource=ressource, type="mouvement_stock")
             .filter(date_transaction__date__gte=aujourdhui - timedelta(days=jours - 1))
             .order_by("-date_transaction")
         )
@@ -158,6 +160,7 @@ class RessourceViewSet(viewsets.ModelViewSet):
         depuis = timezone.now() - timedelta(days=fenetre_jours)
         consommation_totale = Transaction.objects.filter(
             ressource=ressource, type="mouvement_stock", quantite__lt=0, date_transaction__gte=depuis,
+            statut="validee", contre_ecriture_de__isnull=True,
         ).aggregate(s=Sum("quantite"))["s"]
 
         if not consommation_totale:

@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from apps.core.perimetre import verifier_perimetre
+
 from .models import Ressource
 
 
@@ -11,13 +13,15 @@ class RessourceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Ressource
         fields = [
+            "version",
             "id", "type", "nom", "unite", "valeur_unitaire", "niveau_actuel", "seuil_critique", "seuil_alerte",
             "statut", "emplacement", "entite", "entite_nom", "secteur", "secteur_nom",
             "cree_par", "date_creation", "date_maj",
         ]
-        read_only_fields = ["id", "statut", "cree_par", "date_creation", "date_maj"]
+        read_only_fields = ["id", "version", "statut", "cree_par", "date_creation", "date_maj"]
 
     def validate(self, attrs):
+        verifier_perimetre(self, attrs, liens=("entite",))
         seuil_critique = attrs.get("seuil_critique", getattr(self.instance, "seuil_critique", None))
         seuil_alerte = attrs.get("seuil_alerte", getattr(self.instance, "seuil_alerte", None))
         if seuil_critique is not None and seuil_alerte is not None and seuil_critique > seuil_alerte:

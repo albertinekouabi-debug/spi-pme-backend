@@ -1,1 +1,19 @@
+# Secrets et environnements
+.env
+.env.*
+*.pem
+*.key
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.sqlite3
+staticfiles/
+
+# Sauvegardes locales (ne jamais versionner)
+*.bak
 *.bak_*
+*.orig

@@ -97,7 +97,7 @@ class FactureImpayeeDetecteur(Detecteur):
             drafts.append(AlerteDraft(
                 type=self.type_code, niveau=niveau,
                 titre=f"Facture impayée depuis {jours_retard} jours",
-                description=f"Client : {facture.entite.nom} · Montant : {facture.montant} {facture.transaction.devise if facture.transaction else 'XOF'}",
+                description=f"Client : {facture.entite.nom} · Montant : {facture.montant_net} {facture.transaction.devise if facture.transaction else 'XOF'}",
                 facture_id=facture.id,
             ))
         return drafts
@@ -139,6 +139,7 @@ class ConsommationEleveeDetecteur(Detecteur):
         def consommation(depuis, jusqu_a):
             total = Transaction.objects.filter(
                 secteur=secteur, type="mouvement_stock", quantite__lt=0,
+                statut="validee", contre_ecriture_de__isnull=True,
                 date_transaction__date__gte=depuis, date_transaction__date__lt=jusqu_a,
             ).aggregate(s=Sum("quantite"))["s"] or 0
             return abs(float(total))

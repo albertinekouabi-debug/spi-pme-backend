@@ -1,4 +1,4 @@
-﻿from rest_framework import generics, permissions
+from rest_framework import generics, permissions
 
 from .models import Secteur
 from .serializers import SecteurSerializer
@@ -6,11 +6,11 @@ from .serializers import SecteurSerializer
 
 class MesSecteursView(generics.ListAPIView):
     """
-    GET /api/v1/secteurs â€” secteurs accessibles Ã  l'utilisateur connectÃ©
-    (secteur_principal + secteurs secondaires), utilisÃ© pour peupler le
-    sÃ©lecteur "Secteur actif". Ne retourne JAMAIS tous les secteurs du
-    systÃ¨me ici â€” c'est un endpoint utilisateur, pas un outil de gestion.
-    Le CRUD des secteurs eux-mÃªmes (Administration) est un chantier sÃ©parÃ©,
+    GET /api/v1/secteurs — secteurs accessibles à l'utilisateur connecté
+    (secteur_principal + secteurs secondaires), utilisé pour peupler le
+    sélecteur "Secteur actif". Ne retourne JAMAIS tous les secteurs du
+    système ici — c'est un endpoint utilisateur, pas un outil de gestion.
+    Le CRUD des secteurs eux-mêmes (Administration) est un chantier séparé,
     non couvert par cet endpoint.
     """
 

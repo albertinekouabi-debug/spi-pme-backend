@@ -118,6 +118,48 @@ class TestAlgorithmeTendance:
             )
         assert TendanceAlgorithme().generer(secteur) == []
 
+    def _mouvements(self, secteur, ressource, quantites):
+        maintenant = timezone.now()
+        n = len(quantites)
+        for i, quantite in enumerate(quantites):
+            Transaction.objects.create(
+                type="mouvement_stock", secteur=secteur, ressource=ressource,
+                quantite=quantite, date_transaction=maintenant - timedelta(days=n - 1 - i),
+            )
+
+    def test_tendance_erratique_ne_genere_pas_de_faux_positif(self, secteur):
+        # Jeu vérifié numériquement : pente = -11,4/jour, rupture projetée en 0,7 jour (donc sous
+        # le seuil de 7 jours : SANS garde-fou une alerte serait émise) mais R² = 0,367 < 0,5.
+        ressource = Ressource.objects.create(
+            type="produit", nom="Huile 20L", secteur=secteur,
+            niveau_actuel=8, seuil_critique=5, seuil_alerte=20,
+        )
+        self._mouvements(secteur, ressource, [-90, 60, -80, 50, -70, 40, -60])
+        assert TendanceAlgorithme().generer(secteur) == []
+
+    def test_le_garde_fou_r2_est_bien_ce_qui_bloque_l_alerte(self, secteur, monkeypatch):
+        # Contre-test : en désactivant le garde-fou, le même jeu produit une alerte.
+        from apps.intelligence.algorithms import tendance
+        ressource = Ressource.objects.create(
+            type="produit", nom="Huile 20L", secteur=secteur,
+            niveau_actuel=8, seuil_critique=5, seuil_alerte=20,
+        )
+        self._mouvements(secteur, ressource, [-90, 60, -80, 50, -70, 40, -60])
+        monkeypatch.setattr(tendance, "R2_MINIMUM", 0.0)
+        assert len(TendanceAlgorithme().generer(secteur)) == 1
+
+    def test_confiance_reflète_la_qualite_reelle_sans_plancher(self, secteur):
+        ressource = Ressource.objects.create(
+            type="produit", nom="Riz", secteur=secteur,
+            niveau_actuel=15, seuil_critique=10, seuil_alerte=50,
+        )
+        self._mouvements(secteur, ressource, [-10, -10, -10, -10])
+        (draft,) = TendanceAlgorithme().generer(secteur)
+        assert draft.confiance == Decimal("95")  # ajustement parfait, plafonné (jamais 100 %)
+        assert draft.facteurs["nb_jours_observes"] == 4
+        assert "limites" in draft.facteurs
+
+
 
 @pytest.mark.django_db
 class TestServiceGeneration:
@@ -215,3 +257,17 @@ class TestAPISuggestion:
         client.force_authenticate(user=employe)
         response = client.get("/api/v1/suggestions/")
         assert response.status_code == 403
+
+
+@pytest.mark.django_db
+class TestTracabiliteValidation:
+    def test_audit_conserve_le_niveau_de_stock_a_la_generation_et_a_la_validation(
+        self, secteur, ressource_critique, gerant
+    ):
+        from apps.audit.models import JournalAudit
+        (suggestion,) = services.generer_pour_secteur(secteur)
+        # Le stock évolue entre la génération et la validation.
+        Ressource.objects.filter(pk=ressource_critique.pk).update(niveau_actuel=9)
+        services.valider_suggestion(suggestion.id, gerant)
+        entree = JournalAudit.objects.get(action="validation_suggestion")
+        assert entree.details["stock"] == {"niveau_a_la_generation": 2.0, "niveau_a_la_validation": 9.0}

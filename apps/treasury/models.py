@@ -8,18 +8,31 @@ from decimal import Decimal
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db import transaction as db_transaction
 
-from apps.core.models import Secteur
+from apps.core.models import Secteur, Versionne
 from apps.registry.models import Entite
 from apps.resources.models import Ressource
 
 
-class Transaction(models.Model):
+class Transaction(Versionne):
     TYPES = [
         ("entree", "Entrée"),
         ("sortie", "Sortie"),
         ("mouvement_stock", "Mouvement de stock"),
     ]
+
+    STATUTS = [
+        ("brouillon", "Brouillon"),
+        ("validee", "Validée"),
+        ("contrepassee", "Contre-passée"),
+    ]
+    # Champs FINANCIERS : immuables dès que la transaction n'est plus un brouillon.
+    # Toute correction passe par une contre-écriture (apps/treasury/workflow.py).
+    CHAMPS_FINANCIERS = (
+        "type", "montant", "quantite", "devise", "mode_paiement",
+        "entite_id", "ressource_id", "secteur_id", "date_transaction", "reference",
+    )
 
     type = models.CharField(max_length=20, choices=TYPES)
     reference = models.CharField(max_length=60, blank=True)   # ex. FAC-2026-0452
@@ -53,6 +66,27 @@ class Transaction(models.Model):
     date_transaction = models.DateTimeField()
     date_creation = models.DateTimeField(auto_now_add=True)
 
+    # Compatibilité : une transaction créée sans préciser de statut est validée d'emblée
+    # (comportement historique). Le brouillon doit être demandé explicitement.
+    statut = models.CharField(max_length=15, choices=STATUTS, default="validee")
+    date_maj = models.DateTimeField(auto_now=True, null=True)
+
+    # Chaîne de correction (append-only : l'original n'est jamais modifié ni supprimé).
+    #   contre_ecriture_de : cette transaction annule exactement `contre_ecriture_de`.
+    #   remplace           : cette transaction est la version corrigée de `remplace`.
+    contre_ecriture_de = models.ForeignKey(
+        "self", on_delete=models.PROTECT, null=True, blank=True, related_name="contre_ecritures"
+    )
+    remplace = models.ForeignKey(
+        "self", on_delete=models.PROTECT, null=True, blank=True, related_name="remplacements"
+    )
+    motif_correction = models.CharField(max_length=255, blank=True)
+    corrigee_par = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="transactions_corrigees",
+    )
+    date_correction = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         db_table = "transaction"
         verbose_name = "Transaction"
@@ -77,27 +111,49 @@ class Transaction(models.Model):
     def save(self, *args, **kwargs):
         self.clean()
         creation = self._state.adding
-        super().save(*args, **kwargs)
-        # FR-STK-* / §10.3 : un mouvement de stock répercute la quantité sur la
-        # Ressource liée, dont le statut (critique/à surveiller/stable) se
-        # recalcule alors automatiquement via Ressource.save().
-        if creation and self.type == "mouvement_stock" and self.ressource_id:
-            ressource = self.ressource
-            ressource.niveau_actuel = ressource.niveau_actuel + self.quantite
-            ressource.save()
+        statut_precedent = None
+        if not creation:
+            ancien = Transaction.objects.filter(pk=self.pk).values(*self.CHAMPS_FINANCIERS, "statut").first()
+            if ancien is not None:
+                statut_precedent = ancien["statut"]
+                # Défense en profondeur : même hors API (service, admin, shell), une transaction
+                # non brouillon ne peut pas voir ses données financières modifiées.
+                if statut_precedent != "brouillon":
+                    modifies = [c for c in self.CHAMPS_FINANCIERS if ancien[c] != getattr(self, c)]
+                    if modifies:
+                        raise ValidationError(
+                            f"Transaction {statut_precedent} : champs financiers immuables ({', '.join(modifies)}). "
+                            "Utiliser la contre-écriture."
+                        )
+        devient_validee = self.statut == "validee" and (creation or statut_precedent == "brouillon")
+        # Écriture de la transaction ET effet de stock dans UNE transaction SQL : tout ou rien.
+        with db_transaction.atomic():
+            super().save(*args, **kwargs)
+            # FR-STK-* / §10.3 : un mouvement de stock VALIDÉ répercute la quantité sur la Ressource liée
+            # (statut recalculé via Ressource.save()). Un brouillon n'a aucun effet : l'effet s'applique une
+            # seule fois, à la création validée ou au passage brouillon → validée.
+            if devient_validee and self.type == "mouvement_stock" and self.ressource_id:
+                # Verrou de ligne : sans lui, deux mouvements simultanés lisent le même niveau et le second
+                # écrase le premier (mesuré : 8 mouvements de -1 → stock -2 au lieu de -8).
+                ressource = Ressource.objects.select_for_update().get(pk=self.ressource_id)
+                ressource.niveau_actuel = ressource.niveau_actuel + self.quantite
+                ressource.save()
 
     def __str__(self):
         return f"{self.get_type_display()} — {self.reference or self.id}"
 
 
-class Facture(models.Model):
+class Facture(Versionne):
     STATUTS = [
         ("emise", "Émise"),
         ("payee", "Payée"),
         ("impayee", "Impayée"),
         ("relancee", "Relancée"),
         ("annulee", "Annulée"),
+        ("avoir", "Avoir"),
     ]
+    # Champs FINANCIERS d'une facture émise : immuables (correction = avoir, jamais un PATCH).
+    CHAMPS_FINANCIERS = ("numero", "montant", "taux_tva", "entite", "transaction", "secteur")
 
     numero = models.CharField(max_length=60, unique=True)
     transaction = models.ForeignKey(
@@ -118,6 +174,29 @@ class Facture(models.Model):
     date_derniere_relance = models.DateTimeField(null=True, blank=True)
     secteur = models.ForeignKey(Secteur, on_delete=models.PROTECT, related_name="factures")
     date_creation = models.DateTimeField(auto_now_add=True)
+
+    # Annulation tracée (jamais de suppression physique d'un document financier —
+    # audit BE-008). Remplis uniquement quand statut == "annulee".
+    date_maj = models.DateTimeField(auto_now=True, null=True)
+
+    # Avoir (note de crédit) : facture de montant NÉGATIF reliée à la facture d'origine.
+    avoir_de = models.ForeignKey(
+        "self", on_delete=models.PROTECT, null=True, blank=True, related_name="avoirs"
+    )
+    motif_avoir = models.CharField(max_length=255, blank=True)
+
+    motif_annulation = models.CharField(max_length=255, blank=True)
+    annulee_par = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="factures_annulees"
+    )
+    date_annulation = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def montant_net(self):
+        """Montant HT après avoirs (les avoirs sont des factures négatives reliées)."""
+        from django.db.models import Sum
+        credites = self.avoirs.aggregate(t=Sum("montant"))["t"] or 0
+        return self.montant + credites
 
     class Meta:
         db_table = "facture"

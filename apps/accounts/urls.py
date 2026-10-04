@@ -1,4 +1,4 @@
-﻿from django.urls import include, path
+from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from . import views
@@ -14,6 +14,16 @@ urlpatterns = [
     path("auth/logout", views.LogoutView.as_view(), name="auth-logout"),
     path("auth/register", views.InscriptionView.as_view(), name="auth-register"),
     path("auth/verify-email", views.VerificationEmailView.as_view(), name="auth-verify-email"),
+    path(
+        "auth/password-reset/request",
+        views.DemanderReinitialisationMotDePasseView.as_view(),
+        name="auth-password-reset-request",
+    ),
+    path(
+        "auth/password-reset/confirm",
+        views.ConfirmerReinitialisationMotDePasseView.as_view(),
+        name="auth-password-reset-confirm",
+    ),
     path("me", views.MoiView.as_view(), name="moi"),
     path("me/change-password", views.ChangerMotDePasseView.as_view(), name="moi-changer-mot-de-passe"),
     path("", include(router.urls)),

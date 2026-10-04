@@ -3,13 +3,15 @@ from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from apps.core.concurrence import ConcurrenceOptimisteMixin
+from apps.core.idempotence import IdempotentCreateMixin
 from apps.accounts.permissions import HasRolePermission
 
 from .models import Entite
 from .serializers import EntiteSerializer
 
 
-class EntiteViewSet(viewsets.ModelViewSet):
+class EntiteViewSet(IdempotentCreateMixin, ConcurrenceOptimisteMixin, viewsets.ModelViewSet):
     """
     /api/v1/entities
 

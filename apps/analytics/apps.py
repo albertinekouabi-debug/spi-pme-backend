@@ -1,7 +1,6 @@
 from django.apps import AppConfig
 
 
-class AlertsConfig(AppConfig):
+class AnalyticsConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
-    name = "apps.alerts"
-    verbose_name = "Alertes"
+    name = "apps.analytics"

@@ -1,4 +1,4 @@
-﻿import pytest
+import pytest
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Role, Utilisateur
@@ -12,12 +12,12 @@ def secteur_a(db):
 
 @pytest.fixture
 def secteur_b(db):
-    return Secteur.objects.create(code="sante", nom="SantÃ©")
+    return Secteur.objects.create(code="sante", nom="Santé")
 
 
 @pytest.fixture
 def role_employe(db):
-    return Role.objects.create(nom="EmployÃ©")
+    return Role.objects.create(nom="Employé")
 
 
 @pytest.fixture
@@ -65,7 +65,7 @@ class TestMoiView:
         assert utilisateur.telephone == "0600000000"
 
     def test_patch_me_ne_permet_pas_de_changer_son_propre_role(self, utilisateur, role_admin):
-        """Garde-fou critique : Ã©lÃ©vation de privilÃ¨ge via /me interdite."""
+        """Garde-fou critique : élévation de privilège via /me interdite."""
         client = client_connecte(utilisateur)
         client.patch("/api/v1/me", {"role": role_admin.id}, format="json")
         utilisateur.refresh_from_db()
@@ -106,7 +106,7 @@ class TestChangerMotDePasse:
         )
         assert reponse.status_code == 400
         utilisateur.refresh_from_db()
-        assert utilisateur.check_password("MotDePasse#2026")  # inchangÃ©
+        assert utilisateur.check_password("MotDePasse#2026")  # inchangé
 
     def test_refuse_un_nouveau_mot_de_passe_trop_faible(self, utilisateur):
         client = client_connecte(utilisateur)
@@ -128,7 +128,7 @@ class TestMesSecteurs:
         assert secteur_a.id in ids
 
     def test_ne_retourne_pas_un_secteur_auquel_lutilisateur_na_pas_acces(self, utilisateur, secteur_b):
-        """Le serveur ne doit jamais exposer un secteur non autorisÃ©."""
+        """Le serveur ne doit jamais exposer un secteur non autorisé."""
         client = client_connecte(utilisateur)
         reponse = client.get("/api/v1/secteurs")
         ids = [s["id"] for s in reponse.data["results"]] if isinstance(reponse.data, dict) else [s["id"] for s in reponse.data]
@@ -147,3 +147,28 @@ class TestMesSecteurs:
         reponse = client.get("/api/v1/secteurs")
         assert reponse.status_code == 401
 
+
+
+@pytest.mark.django_db
+class TestPermissionsSurMoi:
+    def test_me_expose_les_permissions_du_role_triees(self):
+        from apps.accounts.models import Permission, Role, RolePermission, Utilisateur
+        role = Role.objects.create(nom="Comptable")
+        for code in ("treasury.write", "treasury.read"):
+            p, _ = Permission.objects.get_or_create(code=code, defaults={"module": "treasury"})
+            RolePermission.objects.create(role=role, permission=p)
+        u = Utilisateur.objects.create_user(email="c@x.com", nom_utilisateur="c", password="MotDePasse#2026", role=role)
+        c = APIClient(); c.force_authenticate(user=u)
+        assert c.get("/api/v1/me").data["permissions"] == ["treasury.read", "treasury.write"]
+
+    def test_administrateur_recoit_toutes_les_permissions_connues(self):
+        from apps.accounts.models import Permission, Role, Utilisateur
+        Permission.objects.get_or_create(code="treasury.reopen", defaults={"module": "treasury"})
+        u = Utilisateur.objects.create_user(email="a@x.com", nom_utilisateur="a", password="MotDePasse#2026",
+                                            role=Role.objects.create(nom="Administrateur"))
+        c = APIClient(); c.force_authenticate(user=u)
+        assert "treasury.reopen" in c.get("/api/v1/me").data["permissions"]
+
+    def test_les_listes_d_utilisateurs_n_exposent_pas_les_permissions(self):
+        from apps.accounts.serializers import UtilisateurSerializer
+        assert "permissions" not in UtilisateurSerializer.Meta.fields
