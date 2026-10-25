@@ -20,6 +20,7 @@ def _charger_settings(**env):
     """Importe spi_pme.settings dans un processus propre ; renvoie (code, stderr)."""
     environnement = {k: v for k, v in os.environ.items() if not k.startswith("DJANGO_")}
     environnement.update(env)
+    environnement["DJANGO_SKIP_DOTENV"] = "True"
     resultat = subprocess.run(
         [sys.executable, "-c", "import spi_pme.settings"],
         cwd=RACINE,
@@ -66,6 +67,7 @@ def test_production_active_les_cookies_securises():
     )
     environnement = {k: v for k, v in os.environ.items() if not k.startswith("DJANGO_")}
     environnement["DJANGO_SECRET_KEY"] = CLE_VALIDE
+    environnement["DJANGO_SKIP_DOTENV"] = "True"
     r = subprocess.run([sys.executable, "-c", script], cwd=RACINE, env=environnement,
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr

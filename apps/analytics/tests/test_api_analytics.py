@@ -29,9 +29,18 @@ def _role(nom, codes):
 def ctx(db):
     secteur = Secteur.objects.create(code="commerce", nom="Commerce")
     user = Utilisateur.objects.create_user(email="d@x.com", nom_utilisateur="dir", password="MotDePasse#2026",
-                                           role=_role("Dirigeant", ["treasury.read", "treasury.write"]), secteur_principal=secteur)
+                                           role=_role("Dirigeant", ["treasury.read", "treasury.write", "analytics.read"]), secteur_principal=secteur)
     c = APIClient(); c.force_authenticate(user=user)
     return c, secteur, user
+
+
+def tx_semaine(secteur, type_, montant, k, jour=2):
+    """Transaction placée dans la semaine civile (lundi→dimanche) n°k AVANT la semaine en cours : indépendant du jour d'exécution."""
+    from apps.analytics.series import lundi
+    cible = lundi(AUJOURDHUI) - dt.timedelta(weeks=k) + dt.timedelta(days=jour)
+    return Transaction.objects.create(
+        type=type_, montant=montant, secteur=secteur, statut="validee",
+        date_transaction=timezone.make_aware(dt.datetime.combine(cible, dt.time(12, 0))))
 
 
 def tx(secteur, type_, montant, jours_avant, statut="validee", **kw):
@@ -102,6 +111,12 @@ class TestPerimetre:
                                                      role=_role("Vide", []), secteur_principal=s)
         c2 = APIClient(); c2.force_authenticate(user=sans_droit)
         assert c2.get("/api/v1/analytics/kpis").status_code == 403
+        # treasury.read seule ne suffit PAS : les analyses ont leur permission dédiée (visibilité par rôle, côté serveur)
+        lecteur_tresorerie = Utilisateur.objects.create_user(email="t@x.com", nom_utilisateur="t", password="MotDePasse#2026",
+                                                             role=_role("LecteurTresorerie", ["treasury.read"]), secteur_principal=s)
+        c3 = APIClient(); c3.force_authenticate(user=lecteur_tresorerie)
+        for url in ("kpis", "insights", "anomalies", "forecast/tresorerie"):
+            assert c3.get(f"/api/v1/analytics/{url}").status_code == 403
         assert APIClient().get("/api/v1/analytics/kpis").status_code == 401
 
 
@@ -129,9 +144,9 @@ class TestInsights:
         c, s, _ = ctx
         import random
         rng = random.Random(2)
-        for semaine in range(1, 21):                       # 20 semaines de sorties régulières
-            tx(s, "sortie", str(round(50_000 * rng.lognormvariate(0, 0.1), 2)), semaine * 7 + 2)
-        tx(s, "sortie", "400000.00", 9)                    # semaine récente (≈ semaine -1/-2) : pic ×8
+        for k in range(2, 22):                             # 20 semaines civiles régulières (k=2 → 21)
+            tx_semaine(s, "sortie", str(round(50_000 * rng.lognormvariate(0, 0.1), 2)), k)
+        tx_semaine(s, "sortie", "400000.00", 1)            # dernière semaine complète : pic ×8, quel que soit le jour
         res = c.get("/api/v1/analytics/anomalies").data
         assert res["sorties"]["statut"] == "ok" and res["sorties"]["anomalies"]
         a = res["sorties"]["anomalies"][-1]
@@ -142,8 +157,8 @@ class TestInsights:
         c, s, _ = ctx
         import random
         rng = random.Random(8)
-        for semaine in range(1, 21):
-            tx(s, "entree", str(round(80_000 + rng.gauss(0, 5000), 2)), semaine * 7 + 2)
+        for k in range(1, 21):
+            tx_semaine(s, "entree", str(round(80_000 + rng.gauss(0, 5000), 2)), k)
         r = c.get("/api/v1/analytics/forecast/tresorerie").data
         assert r["statut"] == "ok" and "jamais un fait" in r["nature"] and r["limites"] and r["qualite"]["wape_retro_test"] is not None
 

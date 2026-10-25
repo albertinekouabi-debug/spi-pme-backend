@@ -179,6 +179,7 @@ class TestAPIAlerte:
         assert response.status_code == 200
         assert response.data["critiques"] == 1
         assert response.data["elevees"] == 1
+        assert response.data["resolues"] == 0
 
     def test_employe_sans_permission_est_rejete(self, secteur):
         role_employe = Role.objects.create(nom="Employé")

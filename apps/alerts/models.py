@@ -19,6 +19,7 @@ from apps.treasury.models import Facture
 
 class Alerte(models.Model):
     TYPES = [
+        ("stock_negatif", "Stock négatif"),
         ("stock_critique", "Stock critique"),
         ("stock_a_surveiller", "Stock à surveiller"),
         ("facture_impayee", "Facture impayée"),

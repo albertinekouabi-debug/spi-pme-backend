@@ -15,11 +15,13 @@ from apps.accounts.permissions import HasRolePermission
 
 from . import compliance
 from . import workflow
-from .models import DeclarationConformite, Facture, Transaction
+from .models import DeclarationConformite, DemandeReouverture, Facture, Transaction
 from .serializers import (
     AnnulerFactureSerializer,
     AvoirSerializer,
     CorrectionTransactionSerializer,
+    DecisionReouvertureSerializer,
+    DemandeReouvertureSerializer,
     DeclarationConformiteSerializer,
     DeclarerSerializer,
     ExempterSerializer,
@@ -134,6 +136,19 @@ class TransactionViewSet(IdempotentCreateMixin, ConcurrenceOptimisteMixin, views
             "contre_ecriture": TransactionSerializer(inverse, context=contexte).data,
             "remplacement": TransactionSerializer(nouvelle, context=contexte).data,
         }, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path="demander-reouverture")
+    @idempotente
+    def demander_reouverture(self, request, pk=None):
+        """POST /transactions/{id}/demander-reouverture {motif} — étape 1 de la réouverture à double validation."""
+        serializer = MotifSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            demande = workflow.demander_reouverture(
+                self.get_object(), request.user, serializer.validated_data["motif"], _request_id(request))
+        except workflow.ErreurWorkflow as exc:
+            return _reponse_erreur_workflow(exc)
+        return Response(DemandeReouvertureSerializer(demande).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"], url_path="reouvrir")
     @idempotente
@@ -381,3 +396,45 @@ class DeclarationConformiteViewSet(viewsets.ReadOnlyModelViewSet):
         except ObjectDoesNotExist:
             return Response({"detail": "Déclaration introuvable."}, status=status.HTTP_404_NOT_FOUND)
         return Response(DeclarationConformiteSerializer(declaration).data)
+
+
+class DemandeReouvertureViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    /api/v1/reopen-requests — file d'approbation des réouvertures. Lecture : demandes du périmètre sectoriel.
+    `approuver` / `refuser` : permission « treasury.reopen » ET approbateur ≠ demandeur (vérifiés par le workflow).
+    """
+
+    serializer_class = DemandeReouvertureSerializer
+    permission_classes = [HasRolePermission]
+    required_permissions = {"GET": ["treasury.read"], "POST": ["treasury.write"]}
+
+    def get_queryset(self):
+        from apps.core.perimetre import secteurs_autorises
+        queryset = DemandeReouverture.objects.select_related("transaction", "demandeur", "approbateur")
+        autorises = secteurs_autorises(self.request.user)
+        if autorises is not None:
+            queryset = queryset.filter(transaction__secteur_id__in=autorises)
+        if statut := self.request.query_params.get("statut"):
+            queryset = queryset.filter(statut=statut)
+        return queryset
+
+    def _decider(self, request, approuver):
+        serializer = DecisionReouvertureSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            demande = workflow.decider_reouverture(
+                self.get_object(), request.user, approuver, serializer.validated_data["motif_decision"],
+                _request_id(request))
+        except workflow.ErreurWorkflow as exc:
+            return _reponse_erreur_workflow(exc)
+        return Response(DemandeReouvertureSerializer(demande).data)
+
+    @action(detail=True, methods=["post"], url_path="approuver")
+    @idempotente
+    def approuver(self, request, pk=None):
+        return self._decider(request, True)
+
+    @action(detail=True, methods=["post"], url_path="refuser")
+    @idempotente
+    def refuser(self, request, pk=None):
+        return self._decider(request, False)

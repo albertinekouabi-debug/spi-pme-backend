@@ -28,12 +28,23 @@ SECTEURS = [
     ("restauration", "Restauration / Hôtellerie"),
 ]
 
+# Permissions SPÉCIALES (au-delà de read/write par module) : actes sensibles à droit dédié, jamais implicites.
+#   treasury.reopen : approuver la réouverture d'une transaction validée (double validation, demandeur ≠ approbateur)
+#   treasury.close  : clôturer / rouvrir une période comptable
+#   analytics.read  : indicateurs, analyses, prévisions et copilote (données financières agrégées)
+PERMISSIONS_SPECIALES = {
+    "treasury.reopen": ("treasury", "Approuver la réouverture d'une transaction validée"),
+    "treasury.close": ("treasury", "Clôturer ou rouvrir une période comptable"),
+    "analytics.read": ("intelligence", "Consulter indicateurs, analyses, prévisions et copilote"),
+}
+
 # §3.2 — vue d'ensemble des rôles et permissions
 ROLES_PERMISSIONS = {
     "Administrateur": "ALL",  # instance complète (§3.2)
-    "Gérant": [f"{m}.read" for m in MODULES] + [f"{m}.write" for m in MODULES if m != "audit"],
+    "Gérant": [f"{m}.read" for m in MODULES] + [f"{m}.write" for m in MODULES if m != "audit"]
+    + ["treasury.reopen", "treasury.close", "analytics.read"],
     "Employé": ["resources.read", "resources.write", "tasks.read", "tasks.write", "registry.read"],
-    "Auditeur": ["audit.read", "intelligence.read"],  # lecture seule (§3.1)
+    "Auditeur": ["audit.read", "intelligence.read", "analytics.read"],  # lecture seule (§3.1)
 }
 
 
@@ -58,6 +69,9 @@ class Command(BaseCommand):
                     defaults={"module": module, "description": f"{action} sur le module {module}"},
                 )
                 permissions_creees += int(cree)
+        for code, (module, description) in PERMISSIONS_SPECIALES.items():
+            _, cree = Permission.objects.get_or_create(code=code, defaults={"module": module, "description": description})
+            permissions_creees += int(cree)
         self.stdout.write(self.style.SUCCESS(f"{permissions_creees} nouvelles permissions créées."))
 
         # Rôles + association

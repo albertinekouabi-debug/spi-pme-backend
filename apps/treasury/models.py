@@ -69,6 +69,9 @@ class Transaction(Versionne):
     # Compatibilité : une transaction créée sans préciser de statut est validée d'emblée
     # (comportement historique). Le brouillon doit être demandé explicitement.
     statut = models.CharField(max_length=15, choices=STATUTS, default="validee")
+    # Origine de la saisie : « hors_ligne » = rejouée par la file de synchronisation du mobile (en-tête X-Origine).
+    # Auditable : permet de distinguer une vente saisie sans réseau d'une saisie directe.
+    origine = models.CharField(max_length=10, choices=[("en_ligne", "En ligne"), ("hors_ligne", "Hors ligne")], default="en_ligne")
     date_maj = models.DateTimeField(auto_now=True, null=True)
 
     # Chaîne de correction (append-only : l'original n'est jamais modifié ni supprimé).
@@ -136,11 +139,40 @@ class Transaction(Versionne):
                 # Verrou de ligne : sans lui, deux mouvements simultanés lisent le même niveau et le second
                 # écrase le premier (mesuré : 8 mouvements de -1 → stock -2 au lieu de -8).
                 ressource = Ressource.objects.select_for_update().get(pk=self.ressource_id)
-                ressource.niveau_actuel = ressource.niveau_actuel + self.quantite
+                stock_avant = ressource.niveau_actuel
+                ressource.niveau_actuel = stock_avant + self.quantite   # jamais plafonné à 0, jamais modifié en silence
                 ressource.save()
+                from apps.alerts.services import reconcilier_stock_negatif  # import différé : pas de cycle au chargement
+                reconcilier_stock_negatif(ressource, transaction=self, stock_avant=stock_avant)
 
     def __str__(self):
         return f"{self.get_type_display()} — {self.reference or self.id}"
+
+
+class DemandeReouverture(models.Model):
+    """
+    Réouverture d'une transaction validée = exception encadrée à DEUX personnes :
+    un demandeur (treasury.write) expose un motif ; un approbateur DISTINCT (treasury.reopen) décide.
+    Rien ne change tant que la demande n'est pas approuvée ; tout est journalisé (demande, décision, réouverture).
+    """
+
+    STATUTS = [("en_attente", "En attente"), ("approuvee", "Approuvée"), ("refusee", "Refusée")]
+
+    transaction = models.ForeignKey("Transaction", on_delete=models.PROTECT, related_name="demandes_reouverture")
+    demandeur = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="reouvertures_demandees")
+    motif = models.CharField(max_length=255)
+    statut = models.CharField(max_length=12, choices=STATUTS, default="en_attente")
+    approbateur = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+                                    related_name="reouvertures_decidees")
+    motif_decision = models.CharField(max_length=255, blank=True)
+    date_demande = models.DateTimeField(auto_now_add=True)
+    date_decision = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "demande_reouverture"
+        constraints = [models.UniqueConstraint(
+            fields=["transaction"], condition=models.Q(statut="en_attente"), name="uniq_demande_reouverture_en_attente")]
+        ordering = ["-date_demande"]
 
 
 class Facture(Versionne):

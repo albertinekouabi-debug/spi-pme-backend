@@ -51,6 +51,31 @@ class Detecteur(ABC):
         raise NotImplementedError
 
 
+class StockNegatifDetecteur(Detecteur):
+    """
+    Stock < 0 : situation anormale mais VALIDE (une sortie saisie hors ligne peut précéder la réception qui la
+    couvre). Jamais corrigée artificiellement (pas de plafonnement à 0) : signalée comme événement de pilotage,
+    distinct d'un stock faible, et résolue d'elle-même dès que le niveau redevient >= 0.
+    """
+
+    type_code = "stock_negatif"
+
+    @staticmethod
+    def draft(ressource) -> AlerteDraft:
+        return AlerteDraft(
+            type="stock_negatif", niveau="critique",
+            titre=f"Stock négatif : {ressource.nom}",
+            description=(
+                f"Stock actuel : {ressource.niveau_actuel} {ressource.unite}. Des sorties ont été enregistrées "
+                "avant les entrées qui les couvrent : à régulariser par des mouvements entrants."
+            ),
+            ressource_id=ressource.id,
+        )
+
+    def detecter(self, secteur) -> list[AlerteDraft]:
+        return [self.draft(r) for r in Ressource.objects.filter(secteur=secteur, niveau_actuel__lt=0)]
+
+
 class StockCritiqueDetecteur(Detecteur):
     type_code = "stock_critique"
 
@@ -62,7 +87,7 @@ class StockCritiqueDetecteur(Detecteur):
                 description=f"Stock actuel : {r.niveau_actuel} {r.unite} restant(s).",
                 ressource_id=r.id,
             )
-            for r in Ressource.objects.filter(secteur=secteur, statut="critique")
+            for r in Ressource.objects.filter(secteur=secteur, statut="critique", niveau_actuel__gte=0)  # < 0 : alerte dédiée
         ]
 
 
@@ -163,7 +188,7 @@ class ConsommationEleveeDetecteur(Detecteur):
 
 REGISTRE: dict[str, type[Detecteur]] = {
     d.type_code: d for d in [
-        StockCritiqueDetecteur, StockASurveillerDetecteur,
+        StockNegatifDetecteur, StockCritiqueDetecteur, StockASurveillerDetecteur,
         FactureImpayeeDetecteur, TacheEnRetardDetecteur, ConsommationEleveeDetecteur,
     ]
 }

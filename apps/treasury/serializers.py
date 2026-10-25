@@ -3,7 +3,7 @@ from rest_framework.exceptions import APIException
 
 from apps.core.perimetre import verifier_perimetre
 
-from .models import DeclarationConformite, Facture, Transaction
+from .models import DeclarationConformite, DemandeReouverture, Facture, Transaction
 from .workflow import ErreurWorkflow, assurer_periode_ouverte
 
 
@@ -27,10 +27,10 @@ class TransactionSerializer(serializers.ModelSerializer):
             "entite", "entite_nom", "ressource", "ressource_nom", "secteur", "secteur_nom",
             "auteur", "date_transaction", "date_creation",
             "statut", "contre_ecriture_de", "remplace", "motif_correction", "date_correction",
-            "version", "date_maj",
+            "version", "date_maj", "origine",
         ]
         read_only_fields = [
-            "id", "auteur", "date_creation", "contre_ecriture_de", "remplace", "motif_correction", "date_correction",
+            "id", "auteur", "origine", "date_creation", "contre_ecriture_de", "remplace", "motif_correction", "date_correction",
             "version", "date_maj",
         ]
         # `statut` : brouillon/validée à la création uniquement ; ensuite, seules les actions du
@@ -90,6 +90,8 @@ class TransactionSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if request and request.user.is_authenticated:
             validated_data["auteur"] = request.user
+        if request and request.headers.get("X-Origine") == "hors_ligne":
+            validated_data["origine"] = "hors_ligne"
         instance = super().create(validated_data)
         if instance.statut == "validee":  # un brouillon est évalué à sa validation
             from . import compliance  # import différé pour éviter tout cycle au chargement des apps
@@ -166,6 +168,21 @@ class AvoirSerializer(serializers.Serializer):
 
 class MotifSerializer(serializers.Serializer):
     motif = serializers.CharField(required=True, allow_blank=False, max_length=255)
+
+
+class DecisionReouvertureSerializer(serializers.Serializer):
+    motif_decision = serializers.CharField(required=False, allow_blank=True, max_length=255, default="")
+
+
+class DemandeReouvertureSerializer(serializers.ModelSerializer):
+    demandeur_nom = serializers.CharField(source="demandeur.nom_utilisateur", read_only=True)
+    approbateur_nom = serializers.CharField(source="approbateur.nom_utilisateur", read_only=True, default=None)
+
+    class Meta:
+        model = DemandeReouverture
+        fields = ["id", "transaction", "demandeur", "demandeur_nom", "motif", "statut", "approbateur",
+                  "approbateur_nom", "motif_decision", "date_demande", "date_decision"]
+        read_only_fields = fields
 
 
 class CorrectionTransactionSerializer(serializers.Serializer):

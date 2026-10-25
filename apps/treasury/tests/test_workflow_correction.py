@@ -183,6 +183,12 @@ class TestContreEcriture:
 
 @pytest.mark.django_db
 class TestReouverture:
+    @pytest.fixture(autouse=True)
+    def _reouverture_directe(self, settings):
+        # Ces tests couvrent le mode « une seule personne habilitée » ; le mode sûr par défaut (double validation)
+        # est couvert par test_reouverture_double_validation.py.
+        settings.REOUVERTURE_DOUBLE_VALIDATION = False
+
     def test_sans_permission_refusee_403_et_rien_ne_change(self, ctx):
         client, _, secteur, *_ = ctx
         t = _tx(client, secteur).data
@@ -218,6 +224,12 @@ class TestReouverture:
 
 @pytest.mark.django_db
 class TestPeriodeCloturee:
+    @pytest.fixture(autouse=True)
+    def _reouverture_directe(self, settings):
+        # Ces tests couvrent le mode « une seule personne habilitée » ; le mode sûr par défaut (double validation)
+        # est couvert par test_reouverture_double_validation.py.
+        settings.REOUVERTURE_DOUBLE_VALIDATION = False
+
     def test_creation_datee_dans_une_periode_close_refusee(self, ctx):
         client, _, secteur, *_ = ctx
         secteur.date_cloture = timezone.now().date() - timedelta(days=10); secteur.save()

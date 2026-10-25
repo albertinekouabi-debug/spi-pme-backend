@@ -55,6 +55,46 @@ def generer_pour_secteur(secteur) -> dict:
     return {"creees": creees, "resolues_automatiquement": resolues}
 
 
+def reconcilier_stock_negatif(ressource, *, transaction=None, stock_avant=None):
+    """
+    Appelée à chaque mouvement de stock VALIDÉ (Transaction.save), dans la même transaction SQL : l'alerte
+    apparaît immédiatement (sans attendre un balayage) et se résout dès que le stock redevient >= 0.
+    Journalise : mouvement, utilisateur, quantité, stock avant/après, origine (en ligne / hors ligne).
+    Idempotent : une seule alerte active par ressource ; un rejeu d'idempotence n'arrive jamais ici.
+    """
+    from apps.audit.services import enregistrer
+
+    from .detectors import StockNegatifDetecteur
+
+    active = Alerte.objects.filter(type="stock_negatif", ressource=ressource, statut="active").first()
+    contexte = {
+        "ressource": ressource.nom, "stock_avant": None if stock_avant is None else str(stock_avant),
+        "stock_apres": str(ressource.niveau_actuel),
+        "transaction_id": getattr(transaction, "pk", None),
+        "quantite": None if transaction is None else str(transaction.quantite),
+        "origine": getattr(transaction, "origine", None), "source": "mouvement_stock",
+    }
+    auteur = getattr(transaction, "auteur", None)
+
+    if ressource.niveau_actuel < 0:
+        draft = StockNegatifDetecteur.draft(ressource)
+        if active is None:
+            alerte = Alerte.objects.create(
+                type=draft.type, niveau=draft.niveau, titre=draft.titre, description=draft.description,
+                ressource=ressource, secteur=ressource.secteur,
+            )
+            enregistrer(action="stock_negatif_detecte", module="alerts", auteur=auteur, cible=alerte, details=contexte)
+        else:  # déjà signalé : on tient la description à jour, on trace l'aggravation éventuelle
+            active.description = draft.description
+            active.save(update_fields=["description"])
+            enregistrer(action="stock_negatif_mouvement", module="alerts", auteur=auteur, cible=active, details=contexte)
+    elif active is not None:
+        active.statut = "traitee"
+        active.date_resolution = timezone.now()
+        active.save(update_fields=["statut", "date_resolution"])
+        enregistrer(action="stock_negatif_resolu", module="alerts", auteur=auteur, cible=active, details=contexte)
+
+
 @db_transaction.atomic
 def _decider(alerte_id: int, nouveau_statut: str, utilisateur=None) -> Alerte:
     alerte = Alerte.objects.select_for_update().get(pk=alerte_id)

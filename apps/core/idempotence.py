@@ -42,7 +42,17 @@ def executer_idempotent(request, appel):
     try:
         with transaction.atomic():
             reponse = appel()
-            if reponse.status_code < 500:
+            if not (200 <= reponse.status_code < 300):
+                # Course : une requête concurrente de même clé a pu aboutir pendant qu'on attendait son verrou
+                # (ex. contre-passation déjà faite → notre 409). Son résultat fait foi : on le rejoue plutôt
+                # que de renvoyer un refus causé par SA propre réussite.
+                rejeu = _rejouer(request.user, cle, empreinte)
+                if rejeu is not None:
+                    return rejeu
+            # Seules les opérations qui ONT EU LIEU (2xx) sont mémorisées. Un refus (400 période close, 409 état,
+            # 412 conflit de version...) n'a rien produit : le mémoriser empêcherait de rejouer la même opération
+            # avec la même clé une fois la situation corrigée (ex. « garder ma version » après un conflit).
+            if 200 <= reponse.status_code < 300:
                 CleIdempotence.objects.create(
                     utilisateur=request.user, cle=cle, methode=request.method, chemin=request.path,
                     empreinte_corps=empreinte, statut_http=reponse.status_code, corps_reponse=reponse.data,

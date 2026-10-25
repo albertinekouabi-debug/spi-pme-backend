@@ -37,7 +37,7 @@ def _secteur(request):
 
 class _AnalyticsBase(APIView):
     permission_classes = [HasRolePermission]
-    required_permissions = {"GET": ["treasury.read"], "POST": ["treasury.read"]}
+    required_permissions = {"GET": ["analytics.read"], "POST": ["analytics.read"]}
     throttle_scope = "analytics"
 
 

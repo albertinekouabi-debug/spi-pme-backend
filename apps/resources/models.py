@@ -71,6 +71,10 @@ class Ressource(Versionne):
         Si les seuils ne sont pas encore configurés (ex. ressource fraîchement
         importée), on ne peut pas évaluer la criticité : "stable" par défaut,
         en attente de configuration — pas une valeur inventée par extrapolation."""
+        # Règle métier arrêtée : un stock NÉGATIF est toujours critique, même sans seuils configurés
+        # (situation anormale mais valide : sortie saisie avant la réception qui la couvre).
+        if self.niveau_actuel < 0:
+            return "critique"
         if self.seuil_critique is None or self.seuil_alerte is None:
             return "stable"
         if self.niveau_actuel <= self.seuil_critique:

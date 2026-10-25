@@ -20,6 +20,8 @@ from rest_framework import status
 from rest_framework.exceptions import APIException, ParseError
 from rest_framework.response import Response
 
+from .idempotence import executer_idempotent
+
 _ETAG = re.compile(r'(?:W/)?"([^"]*)"')
 
 
@@ -31,6 +33,12 @@ class PreconditionRequise(APIException):
 
 class ConcurrenceOptimisteMixin:
     def update(self, request, *args, **kwargs):
+        # Idempotence D'ABORD : si la file hors ligne rejoue une modification dont la réponse s'est perdue,
+        # le serveur a déjà avancé la version (v1→v2) ; sans cette étape, le rejeu (If-Match "1") serait pris
+        # pour un conflit avec... sa propre modification. Sans Idempotency-Key : comportement inchangé.
+        return executer_idempotent(request, lambda: self._mettre_a_jour(request, *args, **kwargs))
+
+    def _mettre_a_jour(self, request, *args, **kwargs):
         with transaction.atomic():
             objet = self.get_object()  # contrôle d'accès + périmètre sectoriel
             verrouille = type(objet).objects.select_for_update().get(pk=objet.pk)

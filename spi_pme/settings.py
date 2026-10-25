@@ -4,12 +4,16 @@ Pile validée : Django 5.x + Django REST Framework + Simple JWT + PostgreSQL
 Référence CDC : §7 (architecture globale), §8 (backend), §13 (sécurité)
 """
 import os
+from dotenv import load_dotenv
 from datetime import timedelta
 from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+if os.environ.get("DJANGO_SKIP_DOTENV", "False").strip().lower() not in {"1", "true", "yes", "on"}:
+    load_dotenv(BASE_DIR / ".env", override=False)
 
 DEBUG = os.environ.get("DJANGO_DEBUG", "False") == "True"
 
@@ -207,4 +211,8 @@ if not DEBUG:
 
 # Concurrence optimiste : si True, toute modification (PATCH/PUT) d'une ressource versionnée doit porter
 # If-Match ou If-Unmodified-Since (sinon 428). À activer une fois tous les clients à jour.
+# Réouverture d'une transaction validée : True (défaut, sûr) = demande puis approbation par une AUTRE personne ;
+# False = réouverture directe par un détenteur de « treasury.reopen » (entreprise à une seule personne habilitée).
+REOUVERTURE_DOUBLE_VALIDATION = os.environ.get("REOUVERTURE_DOUBLE_VALIDATION", "True") == "True"
+
 EXIGER_PRECONDITION_MODIFICATION = os.environ.get("EXIGER_PRECONDITION_MODIFICATION", "False") == "True"

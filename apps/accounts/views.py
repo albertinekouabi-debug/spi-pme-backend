@@ -362,7 +362,7 @@ class UtilisateurViewSet(viewsets.ModelViewSet):
 class RoleViewSet(viewsets.ModelViewSet):
     """/api/v1/roles — réservé aux Administrateurs."""
 
-    queryset = Role.objects.prefetch_related("role_permissions__permission").all()
+    queryset = Role.objects.prefetch_related("role_permissions__permission").order_by("nom", "id")
     serializer_class = RoleSerializer
     permission_classes = [EstAdministrateur]
 

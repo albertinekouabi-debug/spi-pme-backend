@@ -24,7 +24,7 @@ from django.utils import timezone
 
 from apps.audit.services import enregistrer
 
-from .models import Facture, Transaction
+from .models import DemandeReouverture, Facture, Transaction
 
 
 class ErreurWorkflow(Exception):
@@ -152,12 +152,8 @@ def _peut_reouvrir(utilisateur) -> bool:
     )
 
 
-@db_transaction.atomic
-def reouvrir(transaction: Transaction, utilisateur, motif: str, request_id=None) -> Transaction:
-    """Réouverture EXCEPTIONNELLE : permission dédiée + motif obligatoire, jamais silencieuse."""
-    if not _peut_reouvrir(utilisateur):
-        raise ErreurWorkflow("La réouverture exige la permission « treasury.reopen ».", 403)
-    t = Transaction.objects.select_for_update().select_related("secteur").get(pk=transaction.pk)
+def _verifier_reouvrable(t: Transaction):
+    """Préconditions communes (à la demande ET à l'approbation : l'état peut changer entre les deux)."""
     if t.statut != "validee":
         raise ErreurWorkflow(f"Seule une transaction validée peut être rouverte (statut : {t.get_statut_display()}).")
     if t.type == "mouvement_stock":
@@ -166,12 +162,74 @@ def reouvrir(transaction: Transaction, utilisateur, motif: str, request_id=None)
         raise ErreurWorkflow("Cette transaction fait déjà partie d'une chaîne de correction.")
     assurer_periode_ouverte(t.secteur, t.date_transaction)
 
+
+def _passer_en_brouillon(t: Transaction, utilisateur, motif, request_id, extra=None):
     ancien = _etat(t)
     t.statut = "brouillon"
     t.save(update_fields=["statut"])
     _auditer("reouverture_transaction", utilisateur, t, ancien=ancien, nouveau=_etat(t), motif=motif,
-             request_id=request_id)
+             request_id=request_id, extra=extra)
+
+
+@db_transaction.atomic
+def reouvrir(transaction: Transaction, utilisateur, motif: str, request_id=None) -> Transaction:
+    """
+    Réouverture DIRECTE (un seul acteur). Désactivée par défaut : avec REOUVERTURE_DOUBLE_VALIDATION=True
+    (sûr), il faut passer par `demander_reouverture` puis `decider_reouverture` (deux personnes distinctes).
+    """
+    from django.conf import settings
+    if getattr(settings, "REOUVERTURE_DOUBLE_VALIDATION", True):
+        raise ErreurWorkflow(
+            "Réouverture à double validation : faire une demande (/demander-reouverture/), "
+            "qu'une AUTRE personne habilitée approuvera.", 409)
+    if not _peut_reouvrir(utilisateur):
+        raise ErreurWorkflow("La réouverture exige la permission « treasury.reopen ».", 403)
+    t = Transaction.objects.select_for_update().select_related("secteur").get(pk=transaction.pk)
+    _verifier_reouvrable(t)
+    _passer_en_brouillon(t, utilisateur, motif, request_id, extra={"validation": "directe"})
     return t
+
+
+@db_transaction.atomic
+def demander_reouverture(transaction: Transaction, utilisateur, motif: str, request_id=None) -> DemandeReouverture:
+    t = Transaction.objects.select_for_update().select_related("secteur").get(pk=transaction.pk)
+    _verifier_reouvrable(t)
+    if t.demandes_reouverture.filter(statut="en_attente").exists():
+        raise ErreurWorkflow("Une demande de réouverture est déjà en attente pour cette transaction.")
+    demande = DemandeReouverture.objects.create(transaction=t, demandeur=utilisateur, motif=motif)
+    _auditer("demande_reouverture", utilisateur, t, motif=motif, request_id=request_id,
+             extra={"demande_id": demande.pk})
+    return demande
+
+
+@db_transaction.atomic
+def decider_reouverture(demande: DemandeReouverture, approbateur, approuver: bool, motif_decision: str = "",
+                        request_id=None) -> DemandeReouverture:
+    d = DemandeReouverture.objects.select_for_update().select_related("transaction").get(pk=demande.pk)
+    if not _peut_reouvrir(approbateur):
+        raise ErreurWorkflow("Approuver une réouverture exige la permission « treasury.reopen ».", 403)
+    if d.demandeur_id == approbateur.pk:
+        # Séparation des tâches : on n'approuve JAMAIS sa propre demande (même Administrateur).
+        raise ErreurWorkflow("Le demandeur ne peut pas approuver sa propre demande de réouverture.", 403)
+    if d.statut != "en_attente":
+        raise ErreurWorkflow(f"Cette demande est déjà {d.get_statut_display().lower()}.")
+    if not approuver and not motif_decision.strip():
+        raise ErreurWorkflow("Un refus doit être motivé.", 400)
+
+    d.approbateur, d.motif_decision, d.date_decision = approbateur, motif_decision, timezone.now()
+    if approuver:
+        t = Transaction.objects.select_for_update().select_related("secteur").get(pk=d.transaction_id)
+        _verifier_reouvrable(t)  # l'état a pu changer depuis la demande (contre-passée, période close...)
+        d.statut = "approuvee"
+        _passer_en_brouillon(t, approbateur, d.motif, request_id,
+                             extra={"validation": "double", "demande_id": d.pk, "demandeur_id": d.demandeur_id,
+                                    "motif_decision": motif_decision})
+    else:
+        d.statut = "refusee"
+    d.save()
+    _auditer("decision_reouverture", approbateur, d.transaction, request_id=request_id, motif=motif_decision,
+             extra={"demande_id": d.pk, "decision": d.statut, "demandeur_id": d.demandeur_id})
+    return d
 
 
 # --------------------------------------------------------------------------- factures / avoirs

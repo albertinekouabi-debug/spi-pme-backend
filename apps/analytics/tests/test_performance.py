@@ -17,7 +17,7 @@ from apps.treasury.models import Facture, Transaction
 def _scenario(n_tx, n_factures):
     s = Secteur.objects.create(code="commerce", nom="Commerce")
     r = Role.objects.create(nom="Dir")
-    p, _ = Permission.objects.get_or_create(code="treasury.read", defaults={"module": "treasury"})
+    p, _ = Permission.objects.get_or_create(code="analytics.read", defaults={"module": "intelligence"})
     RolePermission.objects.create(role=r, permission=p)
     u = Utilisateur.objects.create_user(email="d@x.com", nom_utilisateur="d", password="MotDePasse#2026", role=r, secteur_principal=s)
     entites = [Entite.objects.create(type="client", nom=f"C{i}", secteur=s) for i in range(20)]
